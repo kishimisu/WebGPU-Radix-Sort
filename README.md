@@ -93,22 +93,23 @@ It's disabled by default but can be enabled using the `avoid_bank_conflicts` par
 
 ```
 .
-├── index.js                        # Entry point and example usage
-├── tests.js                        # Utilities for profiling and testing
-├── kernels                      
-│   ├── RadixSortKernel.js          # 4-way Radix Sort kernel definition
-│   ├── PrefixSumKernel.js          # Parallel Prefix Sum kernel definition
-│
-├── shaders                         # Contains the WGSL shader sources as javascript strings
-│   ├── radix_sort.js               # Compute local prefix sums and block sums
-│   ├── radix_sort_reorder.js       # Reorder data to sorted position
-│   ├── prefix_sum.js               # Parallel Prefix Sum (scan) algorithm
+├── index.html                          # Demo page for performance profiling
+├── src
+│   ├── index.js                        # Entry point and example usage
+│   ├── tests.js                        # Utilities for profiling and testing
 │   │
-│   ├── optimizations               # Contains shaders including optimizations (see "Implementation" section)
-│       ├── radix_sort_local_shuffle.js
-│       ├── prefix_sum_no_bank_conflict.js
-│      
-├── index.html                      # Demo page for performance profiling
+│   ├── kernels                      
+│   │   ├── RadixSortKernel.js          # 4-way Radix Sort kernel definition
+│   │   ├── PrefixSumKernel.js          # Parallel Prefix Sum kernel definition
+│   │   
+│   ├── shaders                         # Contains the WGSL shader sources as javascript strings
+│       ├── radix_sort.js               # Compute local prefix sums and block sums
+│       ├── radix_sort_reorder.js       # Reorder data to sorted position
+│       ├── prefix_sum.js               # Parallel Prefix Sum (scan) algorithm   
+│       │
+│       ├── optimizations               # Contains shaders including optimizations (see "Implementation" section)
+│           ├── radix_sort_local_shuffle.js
+│           ├── prefix_sum_no_bank_conflict.js      
 ```
 
 ## References
