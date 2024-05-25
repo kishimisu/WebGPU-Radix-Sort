@@ -18,7 +18,7 @@ Thus, this repository also contains a WebGPU implementation of the method descri
 
 ## Performance Tests
 
-You can test the performance on your computer by setting `TEST_PERFORMANCE` to `true` in the `main.js`.
+I've made a minimal web demo on which you can run the algorithm locally: https://webgpu-radix-sort.vercel.app/
 
 The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU) and a NVIDIA RTX 3080TI (GPU). The vertical axis is logarithmic.
 
