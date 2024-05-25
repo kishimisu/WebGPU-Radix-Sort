@@ -1,6 +1,6 @@
 # Fast 4-way parallel radix sort for WebGPU
 
-This is a WebGPU implementation for the radix sort algorithm as described in the paper [Fast 4-way parallel radix sorting on GPUs](https://www.sci.utah.edu/~csilva/papers/cgf.pdf]).
+This is a WebGPU implementation for the radix sort algorithm as described in the paper [Fast 4-way parallel radix sorting on GPUs](https://www.sci.utah.edu/~csilva/papers/cgf.pdf).
 
 - Sort large arrays of integers on GPU using WGSL compute shaders
 - Sort both a buffer of `keys` and associated `values` at the same time. The sort is made based on the `keys` buffer.
@@ -114,5 +114,5 @@ It's disabled by default but can be enabled using the `avoid_bank_conflicts` par
 
 ## References
 
-- [Fast 4-way parallel radix sorting on GPUs](https://www.sci.utah.edu/~csilva/papers/cgf.pdf])
+- [Fast 4-way parallel radix sorting on GPUs](https://www.sci.utah.edu/~csilva/papers/cgf.pdf)
 - [Parallel Prefix Sum (Scan) with CUDA](https://www.eecs.umich.edu/courses/eecs570/hw/parprefix.pdf)

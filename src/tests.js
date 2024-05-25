@@ -6,8 +6,7 @@ async function test_radix_sort(device) {
     const workgroup_sizes = []
     const max_threads_per_workgroup = device.limits.maxComputeInvocationsPerWorkgroup
 
-    // const sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256]
-    const sizes = [4, 8, 16, 32]
+    const sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256]
     for (let workgroup_size_x of sizes) {
         for (let workgroup_size_y of sizes) {
             if (workgroup_size_x * workgroup_size_y <= max_threads_per_workgroup) {
@@ -40,7 +39,6 @@ async function test_radix_sort(device) {
             workgroup_size: workgroup_size,
             bit_count: bit_count,
         })
-        console.log(kernel)
 
         // Create command buffer and compute pass
         const encoder = device.createCommandEncoder()
