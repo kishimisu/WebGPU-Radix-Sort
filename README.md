@@ -33,7 +33,10 @@ const { RadixSortKernel } = require('webgpu-radix-sort');
 
 ### Using a \<script\> tag
 ```html
-<script src="dist/umd/radix-sort-umd.js"></script>
+<!-- From source -->
+<script src="./dist/umd/radix-sort-umd.js"></script>
+<!-- From CDN -->
+<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.1/dist/umd/radix-sort-umd.js"></script>
 <script>
     const { RadixSortKernel } = RadixSort;
 </script>
@@ -42,7 +45,10 @@ const { RadixSortKernel } = require('webgpu-radix-sort');
 ### Using a \<script type="module"\> tag
 ```html
 <script type="module">
-    import { RadixSortKernel } from 'dist/esm/radix-sort-esm.js';
+    // From source
+    import { RadixSortKernel } from './dist/esm/radix-sort-esm.js';
+    // From CDN
+    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.1/dist/esm/radix-sort-esm.js';
 </script>
 ```
 ## Usage
