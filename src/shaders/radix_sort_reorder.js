@@ -1,10 +1,10 @@
 const radixSortReorderSource = /* wgsl */ `
 
 @group(0) @binding(0) var<storage, read> inputKeys: array<u32>;
-@group(0) @binding(1) var<storage, read> inputValues: array<u32>;
+@group(0) @binding(1) var<storage, read_write> outputKeys: array<u32>;
 @group(0) @binding(2) var<storage, read> local_prefix_sum: array<u32>;
 @group(0) @binding(3) var<storage, read> prefix_block_sum: array<u32>;
-@group(0) @binding(4) var<storage, read_write> outputKeys: array<u32>;
+@group(0) @binding(4) var<storage, read> inputValues: array<u32>;
 @group(0) @binding(5) var<storage, read_write> outputValues: array<u32>;
 
 override WORKGROUP_COUNT: u32;

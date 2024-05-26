@@ -1,8 +1,11 @@
 import RadixSortKernel from "./kernels/RadixSortKernel.js"
 import PrefixSumKernel from "./kernels/PrefixSumKernel.js"
 
-// Test the radix sort kernel on GPU
-async function test_radix_sort(device) {
+/** Test the radix sort kernel on GPU for integrity
+ * 
+ * @param {boolean} keys_and_values - Whether to include a values buffer in the test
+ */
+async function test_radix_sort(device, keys_and_values = true) {
     const workgroup_sizes = []
     const max_threads_per_workgroup = device.limits.maxComputeInvocationsPerWorkgroup
 
@@ -34,7 +37,7 @@ async function test_radix_sort(device) {
         const kernel = new RadixSortKernel({
             device,
             keys: keysBuffer,
-            values: valuesBuffer,
+            values: keys_and_values ? valuesBuffer : null,
             count: sub_element_count,
             workgroup_size: workgroup_size,
             bit_count: bit_count,
@@ -51,11 +54,13 @@ async function test_radix_sort(device) {
         // Copy result back to CPU
         if (bit_count % 4 === 0) {
             encoder.copyBufferToBuffer(kernel.buffers.keys, 0, keysBufferMapped, 0, element_count * 4)
-            encoder.copyBufferToBuffer(kernel.buffers.values, 0, valuesBufferMapped, 0, element_count * 4)
+            if (keys_and_values)
+                encoder.copyBufferToBuffer(kernel.buffers.values, 0, valuesBufferMapped, 0, element_count * 4)
         }
         else {
             encoder.copyBufferToBuffer(kernel.buffers.tmpKeys, 0, keysBufferMapped, 0, element_count * 4)
-            encoder.copyBufferToBuffer(kernel.buffers.tmpValues, 0, valuesBufferMapped, 0, element_count * 4)
+            if (keys_and_values)
+                encoder.copyBufferToBuffer(kernel.buffers.tmpValues, 0, valuesBufferMapped, 0, element_count * 4)
         }
 
         // Submit command buffer
@@ -66,13 +71,17 @@ async function test_radix_sort(device) {
         const keysResult = new Uint32Array(keysBufferMapped.getMappedRange().slice())
         keysBufferMapped.unmap()
 
-        await valuesBufferMapped.mapAsync(GPUMapMode.READ)
-        const valuesResult = new Uint32Array(valuesBufferMapped.getMappedRange().slice())
-        valuesBufferMapped.unmap()
-
         // Check result
         const expected = keys.slice(0, sub_element_count).sort((a, b) => a - b)
-        const isOK = expected.every((v, i) => v === keysResult[i]) && valuesResult.every((v, i) => keysResult[i] == keys[v])
+        let isOK = expected.every((v, i) => v === keysResult[i])
+
+        if (keys_and_values) {
+            await valuesBufferMapped.mapAsync(GPUMapMode.READ)
+            const valuesResult = new Uint32Array(valuesBufferMapped.getMappedRange().slice())
+            valuesBufferMapped.unmap()
+
+            isOK = isOK && valuesResult.every((v, i) => keysResult[i] == keys[v])
+        }
 
         const workgroupCount = Math.ceil(element_count / kernel.workgroup_count)
         console.log('workgroup_size', workgroupCount, element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
@@ -165,6 +174,7 @@ async function test_radix_sort_performance(
     bit_count = 32, 
     workgroup_size_x = 16, 
     workgroup_size_y = 16,
+    keys_and_values = false,
     test_cpu = true,
     local_shuffle = false,
     avoid_bank_conflicts = false
@@ -196,7 +206,7 @@ async function test_radix_sort_performance(
     const radixSortKernel = new RadixSortKernel({
         device,
         keys: keysBuffer,
-        values: valuesBuffer,
+        values: keys_and_values ? valuesBuffer : null,
         count: keys.length,
         workgroup_size: { x: workgroup_size_x, y: workgroup_size_y },
         bit_count: bit_count,

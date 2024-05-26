@@ -14,12 +14,12 @@ async function main_demo() {
 
     // Test Prefix Sum Kernel
     if (false) {
-        test_prefix_sum(device)
+        return test_prefix_sum(device)
     }
 
     // Test Radix Sort Kernel
     if (false) {
-        test_radix_sort(device)
+        return test_radix_sort(device)
     }
 
     // Create random data
@@ -27,7 +27,7 @@ async function main_demo() {
     const max_range = 2 ** bit_count
     const element_count = 1_000_000
     const keys   = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * max_range))
-    const values = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * 1_000_000))
+    const values = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * 1_000_000)) // Optional
 
     // Create keys and values buffers on GPU
     const [keysBuffer, keysResultBuffer] = create_buffers(device, keys)
@@ -37,7 +37,7 @@ async function main_demo() {
     const radixSortKernel = new RadixSortKernel({
         device,
         keys: keysBuffer,
-        values: valuesBuffer,
+        values: valuesBuffer, // Optional
         count: keys.length,
         bit_count: bit_count,
         workgroup_size: { x: 16, y: 16 },

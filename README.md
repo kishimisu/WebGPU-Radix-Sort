@@ -3,7 +3,7 @@
 This is a WebGPU implementation for the radix sort algorithm as described in the paper [Fast 4-way parallel radix sorting on GPUs](https://www.sci.utah.edu/~csilva/papers/cgf.pdf).
 
 - Sort large arrays of integers on GPU using WGSL compute shaders
-- Sort both a buffer of `keys` and associated `values` at the same time. The sort is made based on the `keys` buffer.
+- Sort a buffer of `keys` and associated `values` at the same time. The sort is made based on the `keys` buffer.
 - Supports arrays of arbitrary size
 
 ## Parallel Prefix Sum (Scan)
@@ -27,28 +27,20 @@ The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU)
 ## Usage
 
 ```
-/**
-* @param {GPUDevice} device
-* @param {GPUBuffer} keys - Buffer containing the keys to sort
-* @param {GPUBuffer} values - Buffer containing the associated values
-* @param {number} count - Number of elements to sort
-* @param {number} bit_count - Number of bits per element (default: 32)
-* @param {object} workgroup_size - Workgroup size in x and y dimensions. (x * y) must be a power of two
-* @param {boolean} local_shuffle - Enable "local shuffling" optimization for the radix sort kernel (default: false)
-* @param {boolean} avoid_bank_conflicts - Enable "avoiding bank conflicts" optimization for the prefix sum kernel (default: false)
-*/
+import RadixSortKernel from './kernels/RadixSortKernel.js'
 
 const radixSortKernel = new RadixSortKernel({
-        device,
-        keys: keysBuffer,
-        values: valuesBuffer,
-        count: keys.length,
-        workgroup_size: { x: 16, y: 16 },
-        bit_count: bit_count,
+        device,                           // GPUDevice to use
+        keys: keysBuffer,                 // GPUBuffer containing the keys to sort
+        values: valuesBuffer,             // (optional) GPUBuffer containing the associated values
+        count: keys.length,               // Number of elements to sort
+        workgroup_size: { x: 16, y: 16 }, // Workgroup size in x and y dimensions. (x * y) must be a power of two
+        bit_count: bit_count,             // Number of bits per element. Must be a multiple of 4 (default: 32)
 })
 
 ...
 
+// Sort keysBuffer and valuesBuffer in-place on the GPU
 const pass = encoder.beginComputePass()
 radixSortKernel.dispatch(pass)
 ```
@@ -56,8 +48,9 @@ radixSortKernel.dispatch(pass)
 ## Current limitations
 
 - Only supports integer sorting (up to 32 bits)
-- Only supports bit count that are multiple of 4
-- Only supports array up to 16,776,960 elements (using the default workgroup size of 16x16. Can be increased to 67,107,840 elements by requesting for a workgroup size of 32x32)
+- `bit_count` must be a multiple of 4
+- `workgroup_size.x * workgroup_size.y` must be a power of two
+- Only supports array up to 16,776,960 elements (using the default workgroup size of 16x16. Can be increased to 67,107,840 elements by requesting for a workgroup size of 32x32, see `main_performance()`)
 
 ## Implementation detalis
 

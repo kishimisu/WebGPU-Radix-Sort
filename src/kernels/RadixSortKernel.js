@@ -5,14 +5,15 @@ import reorderSource from "../shaders/radix_sort_reorder.js"
 
 class RadixSortKernel {
     /**
-     * Perform a parallel radix sort on the GPU given a buffer of keys and values
+     * Perform a parallel radix sort on the GPU given a buffer of keys and (optionnaly) values
+     * Note: The buffers are sorted in-place.
      * 
      * Based on "Fast 4-way parallel radix sorting on GPUs"
      * https://www.sci.utah.edu/~csilva/papers/cgf.pdf]
      * 
      * @param {GPUDevice} device
      * @param {GPUBuffer} keys - Buffer containing the keys to sort
-     * @param {GPUBuffer} values - Buffer containing the associated values
+     * @param {GPUBuffer} values - (optional) Buffer containing the associated values
      * @param {number} count - Number of elements to sort
      * @param {number} bit_count - Number of bits per element (default: 32)
      * @param {object} workgroup_size - Workgroup size in x and y dimensions. (x * y) must be a power of two
@@ -40,20 +41,14 @@ class RadixSortKernel {
         this.workgroup_count = Math.ceil(count / this.threads_per_workgroup)
         this.prefix_block_workgroup_count = 4 * this.workgroup_count
 
-        // Create shader modules from wgsl code
-        this.shaderModules = {
-            blockSum: device.createShaderModule({
-                label: 'radix-sort-block-sum',
-                code: local_shuffle ? radixSortSource_LocalShuffle : radixSortSource,
-            }),
-            reorder: device.createShaderModule({
-                label: 'radix-sort-reorder',
-                code: reorderSource,
-            })
-        }
+        this.has_values = (values != null)
 
+        this.shaderModules = {}
         this.buffers = {}
         this.pipelines = []
+
+        // Create shader modules from wgsl code
+        this.create_shader_modules()
 
         // Create GPU buffers
         this.create_buffers(keys, values)
@@ -62,13 +57,35 @@ class RadixSortKernel {
         this.create_pipelines()
     }
 
+    create_shader_modules() {
+        // Remove every occurence of "values" in the shader code if values buffer is not provided
+        const remove_values = (source) => {
+            return source.split('\n')
+                         .filter(line => !line.toLowerCase().includes('values'))
+                         .join('\n')
+        }
+
+        const blockSumSource = this.local_shuffle ? radixSortSource_LocalShuffle : radixSortSource
+        
+        this.shaderModules = {
+            blockSum: this.device.createShaderModule({
+                label: 'radix-sort-block-sum',
+                code: this.has_values ? blockSumSource : remove_values(blockSumSource),
+            }),
+            reorder: this.device.createShaderModule({
+                label: 'radix-sort-reorder',
+                code: this.has_values ? reorderSource : remove_values(reorderSource),
+            })
+        }
+    }
+
     create_buffers(keys, values) {
         // Keys and values double buffering
         const tmpKeysBuffer = this.device.createBuffer({
             size: this.count * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         })
-        const tmpValuesBuffer = this.device.createBuffer({
+        const tmpValuesBuffer = !this.has_values ? null : this.device.createBuffer({
             size: this.count * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         })
@@ -143,7 +160,7 @@ class RadixSortKernel {
                     visibility: GPUShaderStage.COMPUTE,
                     buffer: { type: 'storage' }
                 },
-                ...(this.local_shuffle ? [{
+                ...(this.local_shuffle && this.has_values ? [{
                     binding: 3,
                     visibility: GPUShaderStage.COMPUTE,
                     buffer: { type: 'storage' }
@@ -167,7 +184,7 @@ class RadixSortKernel {
                     resource: { buffer: this.buffers.prefixBlockSum }
                 },
                 // "Local shuffle" optimization needs access to the values buffer
-                ...(this.local_shuffle ? [{
+                ...(this.local_shuffle && this.has_values ? [{
                     binding: 3,
                     resource: { buffer: inValues }
                 }] : [])
@@ -213,7 +230,7 @@ class RadixSortKernel {
                 {
                     binding: 1,
                     visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: 'read-only-storage' }
+                    buffer: { type: 'storage' }
                 },
                 {
                     binding: 2,
@@ -225,16 +242,18 @@ class RadixSortKernel {
                     visibility: GPUShaderStage.COMPUTE,
                     buffer: { type: 'read-only-storage' }
                 },
-                {
-                    binding: 4,
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: 'storage' }
-                },
-                {
-                    binding: 5,
-                    visibility: GPUShaderStage.COMPUTE,
-                    buffer: { type: 'storage' }
-                }
+                ...(this.has_values ? [
+                    {
+                        binding: 4,
+                        visibility: GPUShaderStage.COMPUTE,
+                        buffer: { type: 'read-only-storage' }
+                    },
+                    {
+                        binding: 5,
+                        visibility: GPUShaderStage.COMPUTE,
+                        buffer: { type: 'storage' }
+                    }
+                ] : [])
             ]
         })
 
@@ -247,7 +266,7 @@ class RadixSortKernel {
                 },
                 {
                     binding: 1,
-                    resource: { buffer: inValues }
+                    resource: { buffer: outKeys }
                 },
                 {
                     binding: 2,
@@ -257,14 +276,16 @@ class RadixSortKernel {
                     binding: 3,
                     resource: { buffer: this.buffers.prefixBlockSum }
                 },
-                {
-                    binding: 4,
-                    resource: { buffer: outKeys }
-                },
-                {
-                    binding: 5,
-                    resource: { buffer: outValues }
-                }
+                ...(this.has_values ? [
+                    {
+                        binding: 4,
+                        resource: { buffer: inValues }
+                    },
+                    {
+                        binding: 5,
+                        resource: { buffer: outValues }
+                    }
+                ] : [])
             ]
         })
 
