@@ -580,7 +580,13 @@ class RadixSortKernel {
         workgroup_size = { x: 16, y: 16 },
         local_shuffle = false,
         avoid_bank_conflicts = false,
-    }) {
+    } = {}) {
+        if (device == null) throw new Error('No device provided')
+        if (keys == null) throw new Error('No keys buffer provided')
+        if (!Number.isInteger(count) || count <= 0) throw new Error('Invalid count parameter')
+        if (!Number.isInteger(bit_count) || bit_count <= 0) throw new Error('Invalid bit_count parameter')
+        if (!Number.isInteger(workgroup_size.x) || !Number.isInteger(workgroup_size.y)) throw new Error('Invalid workgroup_size parameter')
+
         this.device = device;
         this.count = count;
         this.bit_count = bit_count;

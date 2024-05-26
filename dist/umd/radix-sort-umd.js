@@ -296,8 +296,9 @@
      * @param {boolean} local_shuffle - Enable "local shuffling" optimization for the radix sort kernel (default: false)
      * @param {boolean} avoid_bank_conflicts - Enable "avoiding bank conflicts" optimization for the prefix sum kernel (default: false)
      */
-    function RadixSortKernel(_ref) {
-      var device = _ref.device,
+    function RadixSortKernel() {
+      var _ref = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {},
+        device = _ref.device,
         keys = _ref.keys,
         values = _ref.values,
         count = _ref.count,
@@ -313,6 +314,11 @@
         _ref$avoid_bank_confl = _ref.avoid_bank_conflicts,
         avoid_bank_conflicts = _ref$avoid_bank_confl === void 0 ? false : _ref$avoid_bank_confl;
       _classCallCheck(this, RadixSortKernel);
+      if (device == null) throw new Error('No device provided');
+      if (keys == null) throw new Error('No keys buffer provided');
+      if (!Number.isInteger(count) || count <= 0) throw new Error('Invalid count parameter');
+      if (!Number.isInteger(bit_count) || bit_count <= 0) throw new Error('Invalid bit_count parameter');
+      if (!Number.isInteger(workgroup_size.x) || !Number.isInteger(workgroup_size.y)) throw new Error('Invalid workgroup_size parameter');
       this.device = device;
       this.count = count;
       this.bit_count = bit_count;
