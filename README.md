@@ -6,7 +6,7 @@ This is a WebGPU implementation for the radix sort algorithm as described in the
 - Sort a buffer of `keys` and associated `values` at the same time. The sort is made based on the `keys` buffer.
 - Supports arrays of arbitrary size
 
-## Parallel Prefix Sum (Scan)
+### Parallel Prefix Sum (Scan)
 
 This algorithm relies on another widely used parallel algorithm called the prefix sum (or scan).
 
@@ -16,26 +16,46 @@ Thus, this repository also contains a WebGPU implementation of the method descri
 - Recurses on itself until the input fits one workgroup
 - Supports arrays of arbitrary size
 
-## Performance Tests
-
-I've made a minimal web demo on which you can run the algorithm locally: https://webgpu-radix-sort.vercel.app/
-
-The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU) and a NVIDIA RTX 3080TI (GPU). The vertical axis is logarithmic.
-
-![results](./results.jpg)
-
-## Usage
-
+## Installation
+### Using npm
+```bash
+npm install webgpu-radix-sort
 ```
-import RadixSortKernel from './kernels/RadixSortKernel.js'
 
+Then import it in your app:
+```javascript
+// ESM
+import { RadixSortKernel } from 'webgpu-radix-sort';
+
+// CommonJS
+const { RadixSortKernel } = require('webgpu-radix-sort');
+```
+
+### Using a \<script\> tag
+```html
+<script src="dist/umd/radix-sort-umd.js"></script>
+<script>
+    const { RadixSortKernel } = RadixSort;
+</script>
+```
+
+### Using a \<script type="module"\> tag
+```html
+<script type="module">
+    import { RadixSortKernel } from 'dist/esm/radix-sort-esm.js';
+</script>
+```
+## Usage
+See example/index.js for a complete example.
+
+```javascript
 const radixSortKernel = new RadixSortKernel({
-        device,                           // GPUDevice to use
+        device: device,                   // GPUDevice to use
         keys: keysBuffer,                 // GPUBuffer containing the keys to sort
         values: valuesBuffer,             // (optional) GPUBuffer containing the associated values
         count: keys.length,               // Number of elements to sort
+        bit_count: 32,                    // Number of bits per element. Must be a multiple of 4 (default: 32)
         workgroup_size: { x: 16, y: 16 }, // Workgroup size in x and y dimensions. (x * y) must be a power of two
-        bit_count: bit_count,             // Number of bits per element. Must be a multiple of 4 (default: 32)
 })
 
 ...
@@ -51,6 +71,14 @@ radixSortKernel.dispatch(pass)
 - `bit_count` must be a multiple of 4
 - `workgroup_size.x * workgroup_size.y` must be a power of two
 - Only supports array up to 16,776,960 elements (using the default workgroup size of 16x16. Can be increased to 67,107,840 elements by requesting for a workgroup size of 32x32, see `main_performance()`)
+
+## Performance Tests
+
+I've made a minimal web demo on which you can run the algorithm locally: https://webgpu-radix-sort.vercel.app/
+
+The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU) and a NVIDIA RTX 3080TI (GPU). The vertical axis is logarithmic.
+
+![results](./example/results.jpg)
 
 ## Implementation detalis
 
@@ -86,16 +114,21 @@ It's disabled by default but can be enabled using the `avoid_bank_conflicts` par
 
 ```
 .
-├── index.html                          # Demo page for performance profiling
-├── src
+├── example
+│   ├── index.html                      # Demo page for performance profiling
 │   ├── index.js                        # Entry point and example usage
 │   ├── tests.js                        # Utilities for profiling and testing
-│   │
-│   ├── kernels                      
-│   │   ├── RadixSortKernel.js          # 4-way Radix Sort kernel definition
-│   │   ├── PrefixSumKernel.js          # Parallel Prefix Sum kernel definition
+│
+├── dist                                # Build output
+│   ├── cjs                             # CommonJS build
+│   ├── esm                             # ES Module build
+│   ├── umd                             # UMD build (Universal Module Definition)
+│
+├── src                                 # Source code
+│   ├── RadixSortKernel.js              # 4-way Radix Sort kernel definition
+│   ├── PrefixSumKernel.js              # Parallel Prefix Sum kernel definition
 │   │   
-│   ├── shaders                         # Contains the WGSL shader sources as javascript strings
+│   ├── shaders                         # WGSL shader sources as javascript strings
 │       ├── radix_sort.js               # Compute local prefix sums and block sums
 │       ├── radix_sort_reorder.js       # Reorder data to sorted position
 │       ├── prefix_sum.js               # Parallel Prefix Sum (scan) algorithm   

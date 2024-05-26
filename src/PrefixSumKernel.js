@@ -1,5 +1,5 @@
-import prefixSumSource from "../shaders/prefix_sum.js"
-import prefixSumSource_NoBankConflict from "../shaders/optimizations/prefix_sum_no_bank_conflict.js"
+import prefixSumSource from "./shaders/prefix_sum"
+import prefixSumSource_NoBankConflict from "./shaders/optimizations/prefix_sum_no_bank_conflict"
 
 class PrefixSumKernel {
     /**

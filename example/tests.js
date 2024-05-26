@@ -1,6 +1,3 @@
-import RadixSortKernel from "./kernels/RadixSortKernel.js"
-import PrefixSumKernel from "./kernels/PrefixSumKernel.js"
-
 /** Test the radix sort kernel on GPU for integrity
  * 
  * @param {boolean} keys_and_values - Whether to include a values buffer in the test
