@@ -16,10 +16,12 @@ var<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn reduce_downsweep(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let WID = wid.x * THREADS_PER_WORKGROUP;
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
     let GID = WID + TID; // Global thread ID
     
     let ELM_TID = TID * 2; // Element pair local ID
@@ -48,7 +50,7 @@ fn reduce_downsweep(
     if (TID == 0) {
         let last_offset = ITEMS_PER_WORKGROUP - 1;
 
-        blockSums[wid.x] = temp[last_offset];
+        blockSums[WORKGROUP_ID] = temp[last_offset];
         temp[last_offset] = 0;
     }
 
@@ -75,13 +77,17 @@ fn reduce_downsweep(
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn add_block_sums(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let GID = wid.x * THREADS_PER_WORKGROUP + TID; // Global thread ID
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
+    let GID = WID + TID; // Global thread ID
+    
 
     let ELM_ID = GID * 2;
-    let blockSum = blockSums[wid.x];
+    let blockSum = blockSums[WORKGROUP_ID];
 
     items[ELM_ID] += blockSum;
     items[ELM_ID + 1] += blockSum;
@@ -234,13 +240,32 @@ class PrefixSumKernel {
         this.create_pass_recursive(data, count);
     }
 
-    create_pass_recursive(data, count) {
-        // Numbers of workgroups needed to process all items
-        const block_count = Math.ceil(count / this.items_per_workgroup);
+    find_optimal_dispatch_size(item_count) {
+        const { maxComputeWorkgroupsPerDimension } = this.device.limits;
 
-        // Create buffer for block sums
+        let workgroup_count = Math.ceil(item_count / this.items_per_workgroup);
+        let x = workgroup_count;
+        let y = 1;
+
+        if (workgroup_count > maxComputeWorkgroupsPerDimension) {
+            x = Math.floor(Math.sqrt(workgroup_count));
+            y = Math.ceil(workgroup_count / x);
+            workgroup_count = x * y;
+        }
+
+        return { 
+            workgroup_count,
+            dispatchSize: { x, y },
+        }
+    }
+
+    create_pass_recursive(data, count) {
+        // Find best dispatch x and y dimensions to minimize unused threads
+        const { workgroup_count, dispatchSize } = this.find_optimal_dispatch_size(count);
+        
+        // Create buffer for block sums        
         const blockSumBuffer = this.device.createBuffer({
-            size: block_count * 4,
+            size: workgroup_count * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         });
 
@@ -295,11 +320,11 @@ class PrefixSumKernel {
             }
         });
 
-        this.pipelines.push({ pipeline: scanPipeline, bindGroup, block_count });
+        this.pipelines.push({ pipeline: scanPipeline, bindGroup, dispatchSize });
 
-        if (block_count > 1) {
+        if (workgroup_count > 1) {
             // Prefix sum on block sums
-            this.create_pass_recursive(blockSumBuffer, block_count);
+            this.create_pass_recursive(blockSumBuffer, workgroup_count);
 
             // Add block sums to local prefix sums
             const blockSumPipeline = this.device.createComputePipeline({
@@ -316,15 +341,15 @@ class PrefixSumKernel {
                 }
             });
 
-            this.pipelines.push({ pipeline: blockSumPipeline, bindGroup, block_count });
+            this.pipelines.push({ pipeline: blockSumPipeline, bindGroup, dispatchSize });
         }
     }
 
     dispatch(pass) {
-        for (const { pipeline, bindGroup, block_count } of this.pipelines) {
+        for (const { pipeline, bindGroup, dispatchSize } of this.pipelines) {
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);
-            pass.dispatchWorkgroups(block_count);
+            pass.dispatchWorkgroups(dispatchSize.x, dispatchSize.y, 1);
         }
     }
 }
@@ -346,10 +371,12 @@ var<workgroup> s_prefix_sum: array<u32, 2 * (THREADS_PER_WORKGROUP + 1)>;
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn radix_sort(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let WID = wid.x * THREADS_PER_WORKGROUP;
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
     let GID = WID + TID; // Global thread ID
 
     // Extract 2 bits from the input
@@ -358,7 +385,13 @@ fn radix_sort(
 
     var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);
 
-    let LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;
+    // If the workgroup is inactive, prevent block_sums buffer update
+    var LAST_THREAD: u32 = 0xffffffff; 
+
+    if (WORKGROUP_ID < WORKGROUP_COUNT) {
+        // Otherwise store the index of the last active thread in the workgroup
+        LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;
+    }
 
     // Initialize parameters for double-buffering
     let TPW = THREADS_PER_WORKGROUP + 1;
@@ -396,7 +429,7 @@ fn radix_sort(
         if (TID == LAST_THREAD) {
             // Store block sum to global memory
             let total_sum: u32 = prefix_sum + bitmask;
-            block_sums[b * WORKGROUP_COUNT + wid.x] = total_sum;
+            block_sums[b * WORKGROUP_COUNT + WORKGROUP_ID] = total_sum;
         }
 
         // Swap buffers
@@ -535,10 +568,13 @@ override ELEMENT_COUNT: u32;
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn radix_sort_reorder(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
-) {
-    let GID = TID + wid.x * THREADS_PER_WORKGROUP; // Global thread ID
+) { 
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
+    let GID = WID + TID; // Global thread ID
 
     if (GID >= ELEMENT_COUNT) {
         return;
@@ -551,7 +587,7 @@ fn radix_sort_reorder(
 
     // Calculate new position
     let extract_bits = (k >> CURRENT_BIT) & 0x3;
-    let pid = extract_bits * WORKGROUP_COUNT + wid.x;
+    let pid = extract_bits * WORKGROUP_COUNT + WORKGROUP_ID;
     let sorted_position = prefix_block_sum[pid] + local_prefix;
     
     outputKeys[sorted_position] = k;
@@ -602,11 +638,15 @@ class RadixSortKernel {
         this.workgroup_count = Math.ceil(count / this.threads_per_workgroup);
         this.prefix_block_workgroup_count = 4 * this.workgroup_count;
 
-        this.has_values = (values != null);
+        this.has_values = (values != null); // Is the values buffer provided ?
 
-        this.shaderModules = {};
-        this.buffers = {};
-        this.pipelines = [];
+        this.dispatchSize = {};  // Dispatch dimension x and y
+        this.shaderModules = {}; // GPUShaderModules
+        this.buffers = {};       // GPUBuffers
+        this.pipelines = [];     // List of passes
+
+        // Find best dispatch x and y dimensions to minimize unused threads
+        this.find_optimal_dispatch_size();
 
         // Create shader modules from wgsl code
         this.create_shader_modules();
@@ -616,6 +656,22 @@ class RadixSortKernel {
         
         // Create multi-pass pipelines
         this.create_pipelines();
+    }
+
+    find_optimal_dispatch_size() {
+        const { maxComputeWorkgroupsPerDimension } = this.device.limits;
+
+        this.dispatchSize = { 
+            x: this.workgroup_count, 
+            y: 1
+        };
+
+        if (this.workgroup_count > maxComputeWorkgroupsPerDimension) {
+            const x = Math.floor(Math.sqrt(this.workgroup_count));
+            const y = Math.ceil(this.workgroup_count / x);
+            
+            this.dispatchSize = { x, y };            
+        }
     }
 
     create_shader_modules() {
@@ -886,13 +942,13 @@ class RadixSortKernel {
         for (const { blockSumPipeline, prefixSumKernel, reorderPipeline } of this.pipelines) {            
             pass.setPipeline(blockSumPipeline.pipeline);
             pass.setBindGroup(0, blockSumPipeline.bindGroup);
-            pass.dispatchWorkgroups(this.workgroup_count, 1, 1);
+            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
 
             prefixSumKernel.dispatch(pass);
 
             pass.setPipeline(reorderPipeline.pipeline);
             pass.setBindGroup(0, reorderPipeline.bindGroup);
-            pass.dispatchWorkgroups(this.workgroup_count, 1, 1);
+            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
         }
     }
 }

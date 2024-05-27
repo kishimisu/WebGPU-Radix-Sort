@@ -105,7 +105,7 @@
     }
   }
 
-  var prefixSumSource = /* wgsl */"\n\n@group(0) @binding(0) var<storage, read_write> items: array<u32>;\n@group(0) @binding(1) var<storage, read_write> blockSums: array<u32>;\n\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride ITEMS_PER_WORKGROUP: u32;\n\nvar<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn reduce_downsweep(\n    @builtin(workgroup_id) wid: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WID = wid.x * THREADS_PER_WORKGROUP;\n    let GID = WID + TID; // Global thread ID\n    \n    let ELM_TID = TID * 2; // Element pair local ID\n    let ELM_GID = GID * 2; // Element pair global ID\n    \n    // Load input to shared memory\n    temp[ELM_TID]     = items[ELM_GID];\n    temp[ELM_TID + 1] = items[ELM_GID + 1];\n\n    var offset: u32 = 1;\n\n    // Up-sweep (reduce) phase\n    for (var d: u32 = ITEMS_PER_WORKGROUP >> 1; d > 0; d >>= 1) {\n        workgroupBarrier();\n\n        if (TID < d) {\n            var ai: u32 = offset * (ELM_TID + 1) - 1;\n            var bi: u32 = offset * (ELM_TID + 2) - 1;\n            temp[bi] += temp[ai];\n        }\n\n        offset *= 2;\n    }\n\n    // Save workgroup sum and clear last element\n    if (TID == 0) {\n        let last_offset = ITEMS_PER_WORKGROUP - 1;\n\n        blockSums[wid.x] = temp[last_offset];\n        temp[last_offset] = 0;\n    }\n\n    // Down-sweep phase\n    for (var d: u32 = 1; d < ITEMS_PER_WORKGROUP; d *= 2) {\n        offset >>= 1;\n        workgroupBarrier();\n\n        if (TID < d) {\n            var ai: u32 = offset * (ELM_TID + 1) - 1;\n            var bi: u32 = offset * (ELM_TID + 2) - 1;\n\n            let t: u32 = temp[ai];\n            temp[ai] = temp[bi];\n            temp[bi] += t;\n        }\n    }\n    workgroupBarrier();\n\n    // Copy result from shared memory to global memory\n    items[ELM_GID]     = temp[ELM_TID];\n    items[ELM_GID + 1] = temp[ELM_TID + 1];\n}\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn add_block_sums(\n    @builtin(workgroup_id) wid: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let GID = wid.x * THREADS_PER_WORKGROUP + TID; // Global thread ID\n\n    let ELM_ID = GID * 2;\n    let blockSum = blockSums[wid.x];\n\n    items[ELM_ID] += blockSum;\n    items[ELM_ID + 1] += blockSum;\n}";
+  var prefixSumSource = /* wgsl */"\n\n@group(0) @binding(0) var<storage, read_write> items: array<u32>;\n@group(0) @binding(1) var<storage, read_write> blockSums: array<u32>;\n\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride ITEMS_PER_WORKGROUP: u32;\n\nvar<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn reduce_downsweep(\n    @builtin(workgroup_id) w_id: vec3<u32>,\n    @builtin(num_workgroups) w_dim: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;\n    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;\n    let GID = WID + TID; // Global thread ID\n    \n    let ELM_TID = TID * 2; // Element pair local ID\n    let ELM_GID = GID * 2; // Element pair global ID\n    \n    // Load input to shared memory\n    temp[ELM_TID]     = items[ELM_GID];\n    temp[ELM_TID + 1] = items[ELM_GID + 1];\n\n    var offset: u32 = 1;\n\n    // Up-sweep (reduce) phase\n    for (var d: u32 = ITEMS_PER_WORKGROUP >> 1; d > 0; d >>= 1) {\n        workgroupBarrier();\n\n        if (TID < d) {\n            var ai: u32 = offset * (ELM_TID + 1) - 1;\n            var bi: u32 = offset * (ELM_TID + 2) - 1;\n            temp[bi] += temp[ai];\n        }\n\n        offset *= 2;\n    }\n\n    // Save workgroup sum and clear last element\n    if (TID == 0) {\n        let last_offset = ITEMS_PER_WORKGROUP - 1;\n\n        blockSums[WORKGROUP_ID] = temp[last_offset];\n        temp[last_offset] = 0;\n    }\n\n    // Down-sweep phase\n    for (var d: u32 = 1; d < ITEMS_PER_WORKGROUP; d *= 2) {\n        offset >>= 1;\n        workgroupBarrier();\n\n        if (TID < d) {\n            var ai: u32 = offset * (ELM_TID + 1) - 1;\n            var bi: u32 = offset * (ELM_TID + 2) - 1;\n\n            let t: u32 = temp[ai];\n            temp[ai] = temp[bi];\n            temp[bi] += t;\n        }\n    }\n    workgroupBarrier();\n\n    // Copy result from shared memory to global memory\n    items[ELM_GID]     = temp[ELM_TID];\n    items[ELM_GID + 1] = temp[ELM_TID + 1];\n}\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn add_block_sums(\n    @builtin(workgroup_id) w_id: vec3<u32>,\n    @builtin(num_workgroups) w_dim: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;\n    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;\n    let GID = WID + TID; // Global thread ID\n    \n\n    let ELM_ID = GID * 2;\n    let blockSum = blockSums[WORKGROUP_ID];\n\n    items[ELM_ID] += blockSum;\n    items[ELM_ID + 1] += blockSum;\n}";
 
   /**
    * Prefix sum with optimization to avoid bank conflicts
@@ -153,14 +153,36 @@
       this.create_pass_recursive(data, count);
     }
     return _createClass(PrefixSumKernel, [{
+      key: "find_optimal_dispatch_size",
+      value: function find_optimal_dispatch_size(item_count) {
+        var maxComputeWorkgroupsPerDimension = this.device.limits.maxComputeWorkgroupsPerDimension;
+        var workgroup_count = Math.ceil(item_count / this.items_per_workgroup);
+        var x = workgroup_count;
+        var y = 1;
+        if (workgroup_count > maxComputeWorkgroupsPerDimension) {
+          x = Math.floor(Math.sqrt(workgroup_count));
+          y = Math.ceil(workgroup_count / x);
+          workgroup_count = x * y;
+        }
+        return {
+          workgroup_count: workgroup_count,
+          dispatchSize: {
+            x: x,
+            y: y
+          }
+        };
+      }
+    }, {
       key: "create_pass_recursive",
       value: function create_pass_recursive(data, count) {
-        // Numbers of workgroups needed to process all items
-        var block_count = Math.ceil(count / this.items_per_workgroup);
+        // Find best dispatch x and y dimensions to minimize unused threads
+        var _this$find_optimal_di = this.find_optimal_dispatch_size(count),
+          workgroup_count = _this$find_optimal_di.workgroup_count,
+          dispatchSize = _this$find_optimal_di.dispatchSize;
 
-        // Create buffer for block sums
+        // Create buffer for block sums        
         var blockSumBuffer = this.device.createBuffer({
-          size: block_count * 4,
+          size: workgroup_count * 4,
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         });
 
@@ -217,11 +239,11 @@
         this.pipelines.push({
           pipeline: scanPipeline,
           bindGroup: bindGroup,
-          block_count: block_count
+          dispatchSize: dispatchSize
         });
-        if (block_count > 1) {
+        if (workgroup_count > 1) {
           // Prefix sum on block sums
-          this.create_pass_recursive(blockSumBuffer, block_count);
+          this.create_pass_recursive(blockSumBuffer, workgroup_count);
 
           // Add block sums to local prefix sums
           var blockSumPipeline = this.device.createComputePipeline({
@@ -240,7 +262,7 @@
           this.pipelines.push({
             pipeline: blockSumPipeline,
             bindGroup: bindGroup,
-            block_count: block_count
+            dispatchSize: dispatchSize
           });
         }
       }
@@ -254,10 +276,10 @@
             var _step$value = _step.value,
               pipeline = _step$value.pipeline,
               bindGroup = _step$value.bindGroup,
-              block_count = _step$value.block_count;
+              dispatchSize = _step$value.dispatchSize;
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);
-            pass.dispatchWorkgroups(block_count);
+            pass.dispatchWorkgroups(dispatchSize.x, dispatchSize.y, 1);
           }
         } catch (err) {
           _iterator.e(err);
@@ -268,7 +290,7 @@
     }]);
   }();
 
-  var radixSortSource = /* wgsl */"\n\n@group(0) @binding(0) var<storage, read> input: array<u32>;\n@group(0) @binding(1) var<storage, read_write> local_prefix_sums: array<u32>;\n@group(0) @binding(2) var<storage, read_write> block_sums: array<u32>;\n\noverride WORKGROUP_COUNT: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride CURRENT_BIT: u32;\noverride ELEMENT_COUNT: u32;\n\nvar<workgroup> s_prefix_sum: array<u32, 2 * (THREADS_PER_WORKGROUP + 1)>;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn radix_sort(\n    @builtin(workgroup_id) wid: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WID = wid.x * THREADS_PER_WORKGROUP;\n    let GID = WID + TID; // Global thread ID\n\n    // Extract 2 bits from the input\n    let elm = input[GID];\n    let extract_bits: u32 = (elm >> CURRENT_BIT) & 0x3;\n\n    var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);\n\n    let LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;\n\n    // Initialize parameters for double-buffering\n    let TPW = THREADS_PER_WORKGROUP + 1;\n    var swapOffset: u32 = 0;\n    var inOffset:  u32 = TID;\n    var outOffset: u32 = TID + TPW;\n\n    // 4-way prefix sum\n    for (var b: u32 = 0; b < 4; b++) {\n        // Initialize local prefix with bitmask\n        let bitmask = select(0u, 1u, extract_bits == b);\n        s_prefix_sum[inOffset + 1] = bitmask;\n        workgroupBarrier();\n\n        // Prefix sum\n        for (var offset: u32 = 1; offset < THREADS_PER_WORKGROUP; offset *= 2) {\n            if (TID >= offset) {\n                s_prefix_sum[outOffset] = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];\n            } else {\n                s_prefix_sum[outOffset] = s_prefix_sum[inOffset];\n            }\n\n            // Swap buffers\n            outOffset = inOffset;\n            swapOffset = TPW - swapOffset;\n            inOffset = TID + swapOffset;\n            \n            workgroupBarrier();\n        }\n\n        // Store prefix sum for current bit\n        let prefix_sum = s_prefix_sum[inOffset];\n        bit_prefix_sums[b] = prefix_sum;\n\n        if (TID == LAST_THREAD) {\n            // Store block sum to global memory\n            let total_sum: u32 = prefix_sum + bitmask;\n            block_sums[b * WORKGROUP_COUNT + wid.x] = total_sum;\n        }\n\n        // Swap buffers\n        outOffset = inOffset;\n        swapOffset = TPW - swapOffset;\n        inOffset = TID + swapOffset;\n    }\n\n    // Store local prefix sum to global memory\n    local_prefix_sums[GID] = bit_prefix_sums[extract_bits];\n}";
+  var radixSortSource = /* wgsl */"\n\n@group(0) @binding(0) var<storage, read> input: array<u32>;\n@group(0) @binding(1) var<storage, read_write> local_prefix_sums: array<u32>;\n@group(0) @binding(2) var<storage, read_write> block_sums: array<u32>;\n\noverride WORKGROUP_COUNT: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride CURRENT_BIT: u32;\noverride ELEMENT_COUNT: u32;\n\nvar<workgroup> s_prefix_sum: array<u32, 2 * (THREADS_PER_WORKGROUP + 1)>;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn radix_sort(\n    @builtin(workgroup_id) w_id: vec3<u32>,\n    @builtin(num_workgroups) w_dim: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;\n    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;\n    let GID = WID + TID; // Global thread ID\n\n    // Extract 2 bits from the input\n    let elm = input[GID];\n    let extract_bits: u32 = (elm >> CURRENT_BIT) & 0x3;\n\n    var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);\n\n    // If the workgroup is inactive, prevent block_sums buffer update\n    var LAST_THREAD: u32 = 0xffffffff; \n\n    if (WORKGROUP_ID < WORKGROUP_COUNT) {\n        // Otherwise store the index of the last active thread in the workgroup\n        LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;\n    }\n\n    // Initialize parameters for double-buffering\n    let TPW = THREADS_PER_WORKGROUP + 1;\n    var swapOffset: u32 = 0;\n    var inOffset:  u32 = TID;\n    var outOffset: u32 = TID + TPW;\n\n    // 4-way prefix sum\n    for (var b: u32 = 0; b < 4; b++) {\n        // Initialize local prefix with bitmask\n        let bitmask = select(0u, 1u, extract_bits == b);\n        s_prefix_sum[inOffset + 1] = bitmask;\n        workgroupBarrier();\n\n        // Prefix sum\n        for (var offset: u32 = 1; offset < THREADS_PER_WORKGROUP; offset *= 2) {\n            if (TID >= offset) {\n                s_prefix_sum[outOffset] = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];\n            } else {\n                s_prefix_sum[outOffset] = s_prefix_sum[inOffset];\n            }\n\n            // Swap buffers\n            outOffset = inOffset;\n            swapOffset = TPW - swapOffset;\n            inOffset = TID + swapOffset;\n            \n            workgroupBarrier();\n        }\n\n        // Store prefix sum for current bit\n        let prefix_sum = s_prefix_sum[inOffset];\n        bit_prefix_sums[b] = prefix_sum;\n\n        if (TID == LAST_THREAD) {\n            // Store block sum to global memory\n            let total_sum: u32 = prefix_sum + bitmask;\n            block_sums[b * WORKGROUP_COUNT + WORKGROUP_ID] = total_sum;\n        }\n\n        // Swap buffers\n        outOffset = inOffset;\n        swapOffset = TPW - swapOffset;\n        inOffset = TID + swapOffset;\n    }\n\n    // Store local prefix sum to global memory\n    local_prefix_sums[GID] = bit_prefix_sums[extract_bits];\n}";
 
   /**
    * Radix sort with "local shuffle and coalesced mapping" optimization
@@ -277,7 +299,7 @@
    */
   var radixSortCoalescedSource = /* wgsl */"\n\n@group(0) @binding(0) var<storage, read_write> input: array<u32>;\n@group(0) @binding(1) var<storage, read_write> local_prefix_sums: array<u32>;\n@group(0) @binding(2) var<storage, read_write> block_sums: array<u32>;\n@group(0) @binding(3) var<storage, read_write> values: array<u32>;\n\noverride WORKGROUP_COUNT: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride CURRENT_BIT: u32;\noverride ELEMENT_COUNT: u32;\n\nvar<workgroup> s_prefix_sum: array<u32, 2 * (THREADS_PER_WORKGROUP + 1)>;\nvar<workgroup> s_prefix_sum_scan: array<u32, 4>;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn radix_sort(\n    @builtin(workgroup_id) wid: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WID = wid.x * THREADS_PER_WORKGROUP;\n    let GID = WID + TID; // Global thread ID\n\n    // Extract 2 bits from the input\n    let elm = input[GID];\n    let val = values[GID];\n    let extract_bits: u32 = (elm >> CURRENT_BIT) & 0x3;\n\n    var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);\n\n    let LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;\n\n    // Initialize parameters for double-buffering\n    let TPW = THREADS_PER_WORKGROUP + 1;\n    var swapOffset: u32 = 0;\n    var inOffset:  u32 = TID;\n    var outOffset: u32 = TID + TPW;\n\n    // 4-way prefix sum\n    for (var b: u32 = 0; b < 4; b++) {\n        // Initialize local prefix with bitmask\n        let bitmask = select(0u, 1u, extract_bits == b);\n        s_prefix_sum[inOffset + 1] = bitmask;\n        workgroupBarrier();\n\n        // Prefix sum\n        for (var offset: u32 = 1; offset < THREADS_PER_WORKGROUP; offset *= 2) {\n            if (TID >= offset) {\n                s_prefix_sum[outOffset] = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];\n            } else {\n                s_prefix_sum[outOffset] = s_prefix_sum[inOffset];\n            }\n\n            // Swap buffers\n            outOffset = inOffset;\n            swapOffset = TPW - swapOffset;\n            inOffset = TID + swapOffset;\n            \n            workgroupBarrier();\n        }\n\n        // Store prefix sum for current bit\n        let prefix_sum = s_prefix_sum[inOffset];\n        bit_prefix_sums[b] = prefix_sum;\n\n        if (TID == LAST_THREAD) {\n            // Store block sum to global memory\n            let total_sum: u32 = prefix_sum + bitmask;\n            block_sums[b * WORKGROUP_COUNT + wid.x] = total_sum;\n        }\n\n        // Swap buffers\n        outOffset = inOffset;\n        swapOffset = TPW - swapOffset;\n        inOffset = TID + swapOffset;\n    }\n\n    let prefix_sum = bit_prefix_sums[extract_bits];   \n\n    // Scan bit prefix sums\n    if (TID == LAST_THREAD) {\n        var sum: u32 = 0;\n        bit_prefix_sums[extract_bits] += 1;\n        for (var i: u32 = 0; i < 4; i++) {\n            s_prefix_sum_scan[i] = sum;\n            sum += bit_prefix_sums[i];\n        }\n    }\n    workgroupBarrier();\n\n    if (GID < ELEMENT_COUNT) {\n        // Compute new position\n        let new_pos: u32 = prefix_sum + s_prefix_sum_scan[extract_bits];\n\n        // Shuffle elements locally\n        input[WID + new_pos] = elm;\n        values[WID + new_pos] = val;\n        local_prefix_sums[WID + new_pos] = prefix_sum;\n    }\n}";
 
-  var radixSortReorderSource = /* wgsl */"\n\n@group(0) @binding(0) var<storage, read> inputKeys: array<u32>;\n@group(0) @binding(1) var<storage, read_write> outputKeys: array<u32>;\n@group(0) @binding(2) var<storage, read> local_prefix_sum: array<u32>;\n@group(0) @binding(3) var<storage, read> prefix_block_sum: array<u32>;\n@group(0) @binding(4) var<storage, read> inputValues: array<u32>;\n@group(0) @binding(5) var<storage, read_write> outputValues: array<u32>;\n\noverride WORKGROUP_COUNT: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride CURRENT_BIT: u32;\noverride ELEMENT_COUNT: u32;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn radix_sort_reorder(\n    @builtin(workgroup_id) wid: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let GID = TID + wid.x * THREADS_PER_WORKGROUP; // Global thread ID\n\n    if (GID >= ELEMENT_COUNT) {\n        return;\n    }\n\n    let k = inputKeys[GID];\n    let v = inputValues[GID];\n\n    let local_prefix = local_prefix_sum[GID];\n\n    // Calculate new position\n    let extract_bits = (k >> CURRENT_BIT) & 0x3;\n    let pid = extract_bits * WORKGROUP_COUNT + wid.x;\n    let sorted_position = prefix_block_sum[pid] + local_prefix;\n    \n    outputKeys[sorted_position] = k;\n    outputValues[sorted_position] = v;\n}";
+  var radixSortReorderSource = /* wgsl */"\n\n@group(0) @binding(0) var<storage, read> inputKeys: array<u32>;\n@group(0) @binding(1) var<storage, read_write> outputKeys: array<u32>;\n@group(0) @binding(2) var<storage, read> local_prefix_sum: array<u32>;\n@group(0) @binding(3) var<storage, read> prefix_block_sum: array<u32>;\n@group(0) @binding(4) var<storage, read> inputValues: array<u32>;\n@group(0) @binding(5) var<storage, read_write> outputValues: array<u32>;\n\noverride WORKGROUP_COUNT: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride CURRENT_BIT: u32;\noverride ELEMENT_COUNT: u32;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn radix_sort_reorder(\n    @builtin(workgroup_id) w_id: vec3<u32>,\n    @builtin(num_workgroups) w_dim: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) { \n    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;\n    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;\n    let GID = WID + TID; // Global thread ID\n\n    if (GID >= ELEMENT_COUNT) {\n        return;\n    }\n\n    let k = inputKeys[GID];\n    let v = inputValues[GID];\n\n    let local_prefix = local_prefix_sum[GID];\n\n    // Calculate new position\n    let extract_bits = (k >> CURRENT_BIT) & 0x3;\n    let pid = extract_bits * WORKGROUP_COUNT + WORKGROUP_ID;\n    let sorted_position = prefix_block_sum[pid] + local_prefix;\n    \n    outputKeys[sorted_position] = k;\n    outputValues[sorted_position] = v;\n}";
 
   var RadixSortKernel = /*#__PURE__*/function () {
     /**
@@ -328,10 +350,15 @@
       this.threads_per_workgroup = workgroup_size.x * workgroup_size.y;
       this.workgroup_count = Math.ceil(count / this.threads_per_workgroup);
       this.prefix_block_workgroup_count = 4 * this.workgroup_count;
-      this.has_values = values != null;
-      this.shaderModules = {};
-      this.buffers = {};
-      this.pipelines = [];
+      this.has_values = values != null; // Is the values buffer provided ?
+
+      this.dispatchSize = {}; // Dispatch dimension x and y
+      this.shaderModules = {}; // GPUShaderModules
+      this.buffers = {}; // GPUBuffers
+      this.pipelines = []; // List of passes
+
+      // Find best dispatch x and y dimensions to minimize unused threads
+      this.find_optimal_dispatch_size();
 
       // Create shader modules from wgsl code
       this.create_shader_modules();
@@ -343,6 +370,23 @@
       this.create_pipelines();
     }
     return _createClass(RadixSortKernel, [{
+      key: "find_optimal_dispatch_size",
+      value: function find_optimal_dispatch_size() {
+        var maxComputeWorkgroupsPerDimension = this.device.limits.maxComputeWorkgroupsPerDimension;
+        this.dispatchSize = {
+          x: this.workgroup_count,
+          y: 1
+        };
+        if (this.workgroup_count > maxComputeWorkgroupsPerDimension) {
+          var x = Math.floor(Math.sqrt(this.workgroup_count));
+          var y = Math.ceil(this.workgroup_count / x);
+          this.dispatchSize = {
+            x: x,
+            y: y
+          };
+        }
+      }
+    }, {
       key: "create_shader_modules",
       value: function create_shader_modules() {
         // Remove every occurence of "values" in the shader code if values buffer is not provided
@@ -629,11 +673,11 @@
               reorderPipeline = _step$value.reorderPipeline;
             pass.setPipeline(blockSumPipeline.pipeline);
             pass.setBindGroup(0, blockSumPipeline.bindGroup);
-            pass.dispatchWorkgroups(this.workgroup_count, 1, 1);
+            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
             prefixSumKernel.dispatch(pass);
             pass.setPipeline(reorderPipeline.pipeline);
             pass.setBindGroup(0, reorderPipeline.bindGroup);
-            pass.dispatchWorkgroups(this.workgroup_count, 1, 1);
+            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
           }
         } catch (err) {
           _iterator.e(err);
