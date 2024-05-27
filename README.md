@@ -96,7 +96,7 @@ You should also take the following limits into consideration when choosing the `
 
 ## Performance Tests
 
-I've made a minimal web demo on which you can run the algorithm locally: https://webgpu-radix-sort.vercel.app/
+I've made a minimal web demo on which you can run the algorithm locally: https://kishimisu.github.io/WebGPU-Radix-Sort/
 
 The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU) and a NVIDIA RTX 3080TI (GPU). The vertical axis is logarithmic.
 
