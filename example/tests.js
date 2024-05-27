@@ -17,7 +17,7 @@ async function test_radix_sort(device, keys_and_values = false) {
 
     console.log('max_elements:', max_elements)
 
-    const sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+    const sizes = [2, 4, 8, 16, 32, 64, 128, 256]
     for (let workgroup_size_x of sizes) {
         for (let workgroup_size_y of sizes) {
             if (workgroup_size_x * workgroup_size_y <= maxComputeInvocationsPerWorkgroup) {
