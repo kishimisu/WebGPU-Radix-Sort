@@ -1,3 +1,4 @@
+import { RadixSortKernel } from "../dist/esm/radix-sort-esm.js"
 import { test_prefix_sum, test_radix_sort, test_radix_sort_performance, create_buffers } from "./tests.js"
 
 const TEST_PERFORMANCES = true
@@ -24,7 +25,7 @@ async function main_demo() {
     // Create random data
     const bit_count = 32
     const max_range = 2 ** bit_count
-    const element_count = 1_000_000
+    const element_count = 20_000_000
     const keys   = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * max_range))
     const values = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * 1_000_000)) // Optional
 
@@ -76,14 +77,15 @@ async function main_performance() {
     const device = await adapter?.requestDevice({
         requiredFeatures: ['timestamp-query'],
         requiredLimits: {
-            // Example on how to allow sorting for a higher amount of elements
-            maxComputeInvocationsPerWorkgroup: 32 * 32,
-            maxStorageBufferBindingSize: 67_107_840 * 4,
+            // Example on how to allow sorting for a higher amount of elements:
+            // maxBufferSize:               100_000_000 * 4,
+            // maxStorageBufferBindingSize: 100_000_000 * 4,
         }
     })
     if (!device) throw new Error('Could not create WebGPU device')
-
-    for (let exp = 1; exp <= 7; exp++) {
+    
+    const max_exp = 7
+    for (let exp = 1; exp <= max_exp; exp++) {
         const element_count = 10 ** exp
         let cpuSum = 0
         let gpuSum = 0
@@ -102,7 +104,7 @@ async function main_performance() {
         // Update DOM
         document.body.innerHTML += (`Element count: ${element_count}`)
         document.body.innerHTML += ('<br>')
-        document.body.innerHTML += (`<b>CPU: ${cpuMs.toFixed(2)}ms, GPU: ${gpuMs.toFixed(2)}ms (${increase})</b>`)
+        document.body.innerHTML += (`<b>[${exp}/${max_exp}] CPU: ${cpuMs.toFixed(2)}ms, GPU: ${gpuMs.toFixed(2)}ms (${increase})</b>`)
         document.body.innerHTML += ('<br>')
         document.body.innerHTML += ('-'.repeat(40))
         document.body.innerHTML += ('<br>')

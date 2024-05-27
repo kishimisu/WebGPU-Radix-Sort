@@ -16,10 +16,13 @@ override ELEMENT_COUNT: u32;
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn radix_sort_reorder(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
-) {
-    let GID = TID + wid.x * THREADS_PER_WORKGROUP; // Global thread ID
+) { 
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
+    let GID = WID + TID; // Global thread ID
 
     if (GID >= ELEMENT_COUNT) {
         return;
@@ -32,7 +35,7 @@ fn radix_sort_reorder(
 
     // Calculate new position
     let extract_bits = (k >> CURRENT_BIT) & 0x3;
-    let pid = extract_bits * WORKGROUP_COUNT + wid.x;
+    let pid = extract_bits * WORKGROUP_COUNT + WORKGROUP_ID;
     let sorted_position = prefix_block_sum[pid] + local_prefix;
     
     outputKeys[sorted_position] = k;

@@ -12,10 +12,12 @@ var<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn reduce_downsweep(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let WID = wid.x * THREADS_PER_WORKGROUP;
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
     let GID = WID + TID; // Global thread ID
     
     let ELM_TID = TID * 2; // Element pair local ID
@@ -44,7 +46,7 @@ fn reduce_downsweep(
     if (TID == 0) {
         let last_offset = ITEMS_PER_WORKGROUP - 1;
 
-        blockSums[wid.x] = temp[last_offset];
+        blockSums[WORKGROUP_ID] = temp[last_offset];
         temp[last_offset] = 0;
     }
 
@@ -71,13 +73,17 @@ fn reduce_downsweep(
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn add_block_sums(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let GID = wid.x * THREADS_PER_WORKGROUP + TID; // Global thread ID
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
+    let GID = WID + TID; // Global thread ID
+    
 
     let ELM_ID = GID * 2;
-    let blockSum = blockSums[wid.x];
+    let blockSum = blockSums[WORKGROUP_ID];
 
     items[ELM_ID] += blockSum;
     items[ELM_ID + 1] += blockSum;

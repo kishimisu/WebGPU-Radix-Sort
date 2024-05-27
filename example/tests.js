@@ -1,29 +1,42 @@
+import { RadixSortKernel, PrefixSumKernel } from "../dist/esm/radix-sort-esm.js"
+
+
 /** Test the radix sort kernel on GPU for integrity
  * 
  * @param {boolean} keys_and_values - Whether to include a values buffer in the test
  */
-async function test_radix_sort(device, keys_and_values = true) {
+async function test_radix_sort(device, keys_and_values = false) {
+    const {
+        maxComputeInvocationsPerWorkgroup,
+        maxStorageBufferBindingSize,
+        maxBufferSize,
+    } = device.limits
+
+    const max_elements = Math.floor(Math.min(maxBufferSize, maxStorageBufferBindingSize) / 4)
     const workgroup_sizes = []
-    const max_threads_per_workgroup = device.limits.maxComputeInvocationsPerWorkgroup
+
+    console.log('max_elements:', max_elements)
 
     const sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256]
     for (let workgroup_size_x of sizes) {
         for (let workgroup_size_y of sizes) {
-            if (workgroup_size_x * workgroup_size_y <= max_threads_per_workgroup) {
+            if (workgroup_size_x * workgroup_size_y <= maxComputeInvocationsPerWorkgroup) {
                 workgroup_sizes.push({ x: workgroup_size_x, y: workgroup_size_y })
             }
         }
     }
-    
-    for (const workgroup_size of workgroup_sizes) {
-        const max_elements      = Math.floor(device.limits.maxComputeWorkgroupsPerDimension * workgroup_size.x * workgroup_size.y / 10)
-        const element_count     = Math.floor(max_elements  * (Math.random() * .1 + .9))
-        const sub_element_count = Math.floor(element_count * Math.random() + .5)
+
+    for (const workgroup_size of workgroup_sizes) 
+    for (let exp = 2; exp < 8; exp++)
+    {
+        const element_count     = Math.floor(Math.min(max_elements, 10 ** exp) * (Math.random() * .1 + .9))
+        const sub_element_count = Math.floor(element_count * Math.random() + 1)
 
         // Create random data
         const bit_count = 32
         const value_range = 2 ** bit_count - 1
         const keys = new Uint32Array(element_count).map(_ => Math.ceil(Math.random() * value_range))
+        // const keys = new Float32Array(element_count).map(_ => Math.random() * 10)
         const values = new Uint32Array(element_count).map((_, i) => i)
 
         // Create GPU buffers
@@ -65,7 +78,7 @@ async function test_radix_sort(device, keys_and_values = true) {
 
         // Read result from GPU
         await keysBufferMapped.mapAsync(GPUMapMode.READ)
-        const keysResult = new Uint32Array(keysBufferMapped.getMappedRange().slice())
+        const keysResult = new keys.constructor(keysBufferMapped.getMappedRange().slice())
         keysBufferMapped.unmap()
 
         // Check result
@@ -80,15 +93,12 @@ async function test_radix_sort(device, keys_and_values = true) {
             isOK = isOK && valuesResult.every((v, i) => keysResult[i] == keys[v])
         }
 
-        const workgroupCount = Math.ceil(element_count / kernel.workgroup_count)
-        console.log('workgroup_size', workgroupCount, element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
+        console.log('workgroup_size', element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
 
         if (!isOK) {
             console.log('keys', keys)
             console.log('keys results', keysResult)
             console.log('keys expected', expected)
-            console.log('values', values)
-            console.log('values result', valuesResult)
             throw new Error('Radix sort error')
         }
     }
@@ -96,22 +106,28 @@ async function test_radix_sort(device, keys_and_values = true) {
 
 // Test the prefix sum kernel on GPU
 async function test_prefix_sum(device) {
+    const {
+        maxComputeInvocationsPerWorkgroup,
+        maxStorageBufferBindingSize,
+        maxBufferSize,
+    } = device.limits
+
+    const max_elements = Math.floor(Math.min(maxBufferSize, maxStorageBufferBindingSize) / 4)
     const workgroup_sizes = []
-    const max_threads_per_workgroup = device.limits.maxComputeInvocationsPerWorkgroup
 
     const sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256]
     for (let workgroup_size_x of sizes) {
         for (let workgroup_size_y of sizes) {
-            if (workgroup_size_x * workgroup_size_y <= max_threads_per_workgroup) {
+            if (workgroup_size_x * workgroup_size_y <= maxComputeInvocationsPerWorkgroup) {
                 workgroup_sizes.push({ x: workgroup_size_x, y: workgroup_size_y })
             }
         }
     }
-    
-    for (const workgroup_size of workgroup_sizes) {
-        const max_elements = device.limits.maxComputeWorkgroupsPerDimension * 2 * workgroup_size.x * workgroup_size.y
-        const element_count     = Math.floor(max_elements  * (Math.random() * .1 + .9))
-        const sub_element_count = Math.floor(element_count * Math.random() + .5)
+
+    for (const workgroup_size of workgroup_sizes)
+    for (let exp = 2; exp < 8; exp++) {
+        const element_count     = Math.floor(Math.min(max_elements, 10 ** exp) * (Math.random() * .1 + .9))
+        const sub_element_count = Math.floor(element_count * Math.random() + 1)
 
         // Create random data
         const data = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * 8))
@@ -151,8 +167,7 @@ async function test_prefix_sum(device) {
         const expected = prefix_sum_cpu(data.slice(0, sub_element_count))
         const isOK = expected.every((v, i) => v === dataMapped[i])
 
-        const workgroupCount = Math.ceil(element_count / prefixSumKernel.items_per_workgroup)
-        console.log('workgroup_size', workgroupCount, element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
+        console.log('workgroup_size', element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
 
         if (!isOK) {
             console.log('input', data)
@@ -259,7 +274,7 @@ function create_buffers(device, data) {
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
         mappedAtCreation: true
     })
-    new Uint32Array(dataBuffer.getMappedRange()).set(data)
+    new data.constructor(dataBuffer.getMappedRange()).set(data)
     dataBuffer.unmap()
     
     // Create buffer to read back data from CPU

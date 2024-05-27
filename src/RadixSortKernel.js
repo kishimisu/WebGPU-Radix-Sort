@@ -47,11 +47,15 @@ class RadixSortKernel {
         this.workgroup_count = Math.ceil(count / this.threads_per_workgroup)
         this.prefix_block_workgroup_count = 4 * this.workgroup_count
 
-        this.has_values = (values != null)
+        this.has_values = (values != null) // Is the values buffer provided ?
 
-        this.shaderModules = {}
-        this.buffers = {}
-        this.pipelines = []
+        this.dispatchSize = {}  // Dispatch dimension x and y
+        this.shaderModules = {} // GPUShaderModules
+        this.buffers = {}       // GPUBuffers
+        this.pipelines = []     // List of passes
+
+        // Find best dispatch x and y dimensions to minimize unused threads
+        this.find_optimal_dispatch_size()
 
         // Create shader modules from wgsl code
         this.create_shader_modules()
@@ -61,6 +65,22 @@ class RadixSortKernel {
         
         // Create multi-pass pipelines
         this.create_pipelines()
+    }
+
+    find_optimal_dispatch_size() {
+        const { maxComputeWorkgroupsPerDimension } = this.device.limits
+
+        this.dispatchSize = { 
+            x: this.workgroup_count, 
+            y: 1
+        }
+
+        if (this.workgroup_count > maxComputeWorkgroupsPerDimension) {
+            const x = Math.floor(Math.sqrt(this.workgroup_count))
+            const y = Math.ceil(this.workgroup_count / x)
+            
+            this.dispatchSize = { x, y }            
+        }
     }
 
     create_shader_modules() {
@@ -331,13 +351,13 @@ class RadixSortKernel {
         for (const { blockSumPipeline, prefixSumKernel, reorderPipeline } of this.pipelines) {            
             pass.setPipeline(blockSumPipeline.pipeline)
             pass.setBindGroup(0, blockSumPipeline.bindGroup)
-            pass.dispatchWorkgroups(this.workgroup_count, 1, 1)
+            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1)
 
             prefixSumKernel.dispatch(pass)
 
             pass.setPipeline(reorderPipeline.pipeline)
             pass.setBindGroup(0, reorderPipeline.bindGroup)
-            pass.dispatchWorkgroups(this.workgroup_count, 1, 1)
+            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1)
         }
     }
 }

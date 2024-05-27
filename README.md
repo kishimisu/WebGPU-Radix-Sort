@@ -2,7 +2,9 @@
 
 This is a WebGPU implementation for the radix sort algorithm as described in the paper [Fast 4-way parallel radix sorting on GPUs](https://www.sci.utah.edu/~csilva/papers/cgf.pdf).
 
-- Sort large arrays of integers on GPU using WGSL compute shaders
+- Sort large arrays on GPU using WGSL compute shaders
+- Supports 32-bit unsigned integers (`Uint32Array`)
+- Supports 32-bit unsigned floating points (`Float32Array`)
 - Sort a buffer of `keys` and associated `values` at the same time. The sort is made based on the `keys` buffer.
 - Supports arrays of arbitrary size
 
@@ -36,7 +38,7 @@ const { RadixSortKernel } = require('webgpu-radix-sort');
 <!-- From source -->
 <script src="./dist/umd/radix-sort-umd.js"></script>
 <!-- From CDN -->
-<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.1/dist/umd/radix-sort-umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.2/dist/umd/radix-sort-umd.js"></script>
 <script>
     const { RadixSortKernel } = RadixSort;
 </script>
@@ -48,7 +50,7 @@ const { RadixSortKernel } = require('webgpu-radix-sort');
     // From source
     import { RadixSortKernel } from './dist/esm/radix-sort-esm.js';
     // From CDN
-    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.1/dist/esm/radix-sort-esm.js';
+    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.2/dist/esm/radix-sort-esm.js';
 </script>
 ```
 ## Usage
@@ -71,12 +73,26 @@ const pass = encoder.beginComputePass()
 radixSortKernel.dispatch(pass)
 ```
 
-## Current limitations
+### Current limitations
 
-- Only supports integer sorting (up to 32 bits)
+- Sort in ascending order
+- Only supports unsigned values
 - `bit_count` must be a multiple of 4
 - `workgroup_size.x * workgroup_size.y` must be a power of two
-- Only supports array up to 16,776,960 elements (using the default workgroup size of 16x16. Can be increased to 67,107,840 elements by requesting for a workgroup size of 32x32, see `main_performance()`)
+
+### Maximum number of elements
+
+The maximum number of elements that can be processed is not bound by the implementation itself but by WebGPU limits, which can be increased when creating the GPUDevice. 
+
+If you encounter warnings when creating or dispatching the radix sort kernel, try increasing the relevant limits:
+- `maxBufferSize` (default: 268,435,456, limiting the number of elements to 67,108,864)
+- `maxStorageBufferBindingSize` (default: 134,217,728, limiting the number of elements to 33,554,432)
+
+You should also take the following limits into consideration when choosing the `workgroup_size` parameter:
+
+- `maxComputeWorkgroupSizeX` (default: 256) ⟺ workgroup_size.x
+- `maxComputeWorkgroupSizeY` (default: 256) ⟺ workgroup_size.y
+- `maxComputeInvocationsPerWorkgroup` (default: 256) ⟺ workgroup_size.x * workgroup_size.y
 
 ## Performance Tests
 
@@ -120,8 +136,8 @@ It's disabled by default but can be enabled using the `avoid_bank_conflicts` par
 
 ```
 .
+├── index.html                          # Demo page for performance profiling
 ├── example
-│   ├── index.html                      # Demo page for performance profiling
 │   ├── index.js                        # Entry point and example usage
 │   ├── tests.js                        # Utilities for profiling and testing
 │

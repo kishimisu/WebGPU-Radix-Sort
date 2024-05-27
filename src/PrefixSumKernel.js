@@ -39,13 +39,32 @@ class PrefixSumKernel {
         this.create_pass_recursive(data, count)
     }
 
-    create_pass_recursive(data, count) {
-        // Numbers of workgroups needed to process all items
-        const block_count = Math.ceil(count / this.items_per_workgroup)
+    find_optimal_dispatch_size(item_count) {
+        const { maxComputeWorkgroupsPerDimension } = this.device.limits
 
-        // Create buffer for block sums
+        let workgroup_count = Math.ceil(item_count / this.items_per_workgroup)
+        let x = workgroup_count
+        let y = 1
+
+        if (workgroup_count > maxComputeWorkgroupsPerDimension) {
+            x = Math.floor(Math.sqrt(workgroup_count))
+            y = Math.ceil(workgroup_count / x)
+            workgroup_count = x * y
+        }
+
+        return { 
+            workgroup_count,
+            dispatchSize: { x, y },
+        }
+    }
+
+    create_pass_recursive(data, count) {
+        // Find best dispatch x and y dimensions to minimize unused threads
+        const { workgroup_count, dispatchSize } = this.find_optimal_dispatch_size(count)
+        
+        // Create buffer for block sums        
         const blockSumBuffer = this.device.createBuffer({
-            size: block_count * 4,
+            size: workgroup_count * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         })
 
@@ -100,11 +119,11 @@ class PrefixSumKernel {
             }
         })
 
-        this.pipelines.push({ pipeline: scanPipeline, bindGroup, block_count })
+        this.pipelines.push({ pipeline: scanPipeline, bindGroup, dispatchSize })
 
-        if (block_count > 1) {
+        if (workgroup_count > 1) {
             // Prefix sum on block sums
-            this.create_pass_recursive(blockSumBuffer, block_count)
+            this.create_pass_recursive(blockSumBuffer, workgroup_count)
 
             // Add block sums to local prefix sums
             const blockSumPipeline = this.device.createComputePipeline({
@@ -121,15 +140,15 @@ class PrefixSumKernel {
                 }
             })
 
-            this.pipelines.push({ pipeline: blockSumPipeline, bindGroup, block_count })
+            this.pipelines.push({ pipeline: blockSumPipeline, bindGroup, dispatchSize })
         }
     }
 
     dispatch(pass) {
-        for (const { pipeline, bindGroup, block_count } of this.pipelines) {
+        for (const { pipeline, bindGroup, dispatchSize } of this.pipelines) {
             pass.setPipeline(pipeline)
             pass.setBindGroup(0, bindGroup)
-            pass.dispatchWorkgroups(block_count)
+            pass.dispatchWorkgroups(dispatchSize.x, dispatchSize.y, 1)
         }
     }
 }
