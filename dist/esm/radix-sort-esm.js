@@ -116,10 +116,12 @@ var<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn reduce_downsweep(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let WID = wid.x * THREADS_PER_WORKGROUP;
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
     let GID = WID + TID; // Global thread ID
     
     let ELM_TID = TID * 2; // Element pair local ID
@@ -157,7 +159,7 @@ fn reduce_downsweep(
         var last_offset = ITEMS_PER_WORKGROUP - 1;
         last_offset += get_offset(last_offset);
 
-        blockSums[wid.x] = temp[last_offset];
+        blockSums[WORKGROUP_ID] = temp[last_offset];
         temp[last_offset] = 0;
     }
 
@@ -186,13 +188,16 @@ fn reduce_downsweep(
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn add_block_sums(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let GID = wid.x * THREADS_PER_WORKGROUP + TID; // Global thread ID
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
+    let GID = WID + TID; // Global thread ID
 
     let ELM_ID = GID * 2;
-    let blockSum = blockSums[wid.x];
+    let blockSum = blockSums[WORKGROUP_ID];
 
     items[ELM_ID] += blockSum;
     items[ELM_ID + 1] += blockSum;
@@ -462,10 +467,12 @@ var<workgroup> s_prefix_sum_scan: array<u32, 4>;
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn radix_sort(
-    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
     @builtin(local_invocation_index) TID: u32, // Local thread ID
 ) {
-    let WID = wid.x * THREADS_PER_WORKGROUP;
+    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
+    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
     let GID = WID + TID; // Global thread ID
 
     // Extract 2 bits from the input
@@ -475,7 +482,13 @@ fn radix_sort(
 
     var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);
 
-    let LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;
+    // If the workgroup is inactive, prevent block_sums buffer update
+    var LAST_THREAD: u32 = 0xffffffff; 
+
+    if (WORKGROUP_ID < WORKGROUP_COUNT) {
+        // Otherwise store the index of the last active thread in the workgroup
+        LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;
+    }
 
     // Initialize parameters for double-buffering
     let TPW = THREADS_PER_WORKGROUP + 1;
@@ -513,7 +526,7 @@ fn radix_sort(
         if (TID == LAST_THREAD) {
             // Store block sum to global memory
             let total_sum: u32 = prefix_sum + bitmask;
-            block_sums[b * WORKGROUP_COUNT + wid.x] = total_sum;
+            block_sums[b * WORKGROUP_COUNT + WORKGROUP_ID] = total_sum;
         }
 
         // Swap buffers
