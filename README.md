@@ -6,7 +6,13 @@ This is a WebGPU implementation for the radix sort algorithm as described in the
 - Supports 32-bit unsigned integers (`Uint32Array`)
 - Supports 32-bit unsigned floating points (`Float32Array`)
 - Sort a buffer of `keys` and associated `values` at the same time. The sort is made based on the `keys` buffer.
+- Includes "Order Checking" optimization to exit early if the input is already sorted. This can improve real-time performances in the case the input doesn't change much between frames.
 - Supports arrays of arbitrary size
+
+#### Use Cases:
+- You need to sort data directly on the GPU
+- You need to sort a large number of elements (> 100,000 elements) faster than the CPU
+- You need to sort a large number of elements in real-time applications
 
 ### Parallel Prefix Sum (Scan)
 
@@ -38,7 +44,7 @@ const { RadixSortKernel } = require('webgpu-radix-sort');
 <!-- From source -->
 <script src="./dist/umd/radix-sort-umd.js"></script>
 <!-- From CDN -->
-<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.3/dist/umd/radix-sort-umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.4/dist/umd/radix-sort-umd.js"></script>
 <script>
     const { RadixSortKernel } = RadixSort;
 </script>
@@ -50,33 +56,45 @@ const { RadixSortKernel } = require('webgpu-radix-sort');
     // From source
     import { RadixSortKernel } from './dist/esm/radix-sort-esm.js';
     // From CDN
-    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.3/dist/esm/radix-sort-esm.js';
+    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.4/dist/esm/radix-sort-esm.js';
 </script>
 ```
 ## Usage
-See example/index.js for a complete example.
-
 ```javascript
+// Create GPU device
+const adapter = await navigator.gpu?.requestAdapter()
+const device = await adapter?.requestDevice()
+
+// Create GPU buffers
+const keysBuffer = device.createBuffer({ ... })   // keys must be unsigned (>= 0)
+const valuesBuffer = device.createBuffer({ ... }) // values can be any type
+
+// Create radix sort kernel    
 const radixSortKernel = new RadixSortKernel({
         device: device,                   // GPUDevice to use
         keys: keysBuffer,                 // GPUBuffer containing the keys to sort
         values: valuesBuffer,             // (optional) GPUBuffer containing the associated values
         count: keys.length,               // Number of elements to sort
+        check_order: false,               // Exit early if the input is sorted (can improve real-time applications)
         bit_count: 32,                    // Number of bits per element. Must be a multiple of 4 (default: 32)
         workgroup_size: { x: 16, y: 16 }, // Workgroup size in x and y dimensions. (x * y) must be a power of two
 })
 
-...
-
-// Sort keysBuffer and valuesBuffer in-place on the GPU
+// Create CommandEncoder and ComputePass
+const encoder = device.createCommandEncoder()
 const pass = encoder.beginComputePass()
-radixSortKernel.dispatch(pass)
+
+radixSortKernel.dispatch(pass) // Sort keysBuffer and valuesBuffer in-place on the GPU
+
+pass.end()
+device.queue.submit([encoder.finish()])
 ```
 
 ### Current limitations
 
 - Sort in ascending order
-- Only supports unsigned values
+- Only supports unsigned values for the keys buffer
+- The elements in the keys and values buffers must be aligned to 4 bytes
 - `bit_count` must be a multiple of 4
 - `workgroup_size.x * workgroup_size.y` must be a power of two
 
@@ -106,21 +124,43 @@ The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU)
 
 ### 1) Fast 4-way parallel radix sort
 
+#### Order checking
+
+To improve performance in cases where the input data is already sorted or nearly sorted, the original paper describes a method that will initially scan the input array before each pass of the algorithm. In the case where the input array is sorted, the algorithm will exit early and prevent unecessary calculations. This can be useful if the data is sorted every frame with few changes between each frame for instance.
+
+In WebGPU however, this check is not as easy to achieve while keeping optimal performances, mainly because every pass and their attributes needs to be encoded prior to being sent to the GPU.
+
+After a few attempts, I managed to implement a version of this check that seem to greatly improve the performance in the case the array is already sorted, or when it gets sorted before all the passes finishes.
+This optimization can be enabled with the `check_order` parameter, and you can also test it on the demo page for already sorted arrays.
+
+Here's a broken-down version of how I implemeted it:
+
+First, I changed the entire dispatching process to use indirect buffers with `dispatchWorkgroupsIndirect` instead of passing these values from the CPU via `dispatchWorkgroups`. This way, I can dynamically change the number of workgroups dispatched for each pipeline directly from the GPU.
+
+Then, I created a custom `CheckSortKernel` that performs a parallel reduction on an input array to check if it is sorted, and update relevant dispatch buffers accordingly.
+To follow the original paper idea, I created two versions of this kernel: a fast one that checks only a small part of the array, and a full one that checks the entire array.
+When this optimization is enabled, these two kernels are dispatched every 2 pass before the radix sort pipelines, and will effectively stop the execution of the algorithm if the array is sorted:
+
+
+1. CheckSortKernel (fast):
+    - Check for a small part of the array to see if it is sorted (by default this kernel only creates 4 workgroups, so 1024 elements are checked)
+    - If the array isn't sorted, skip the full check (zero out the full check dispatch buffer)
+    - If the array is sorted, run the full check (revert the full check dispatch buffer)
+
+2. CheckSortKernel (full):
+    - Check the entire array to see if it is sorted
+    - If the array is sorted, skip the radix sort (zero out the radix sort dispatch buffer) and set a flag in a specific buffer that will skip any further passes
+    - If the array isn't sorted, run the radix sort (revert the radix sort dispatch buffer)
+
+3. RadixSortKernel
+    - The radix sort kernel will now run conditionally based on the result of the check sort kernels
+
 #### Local shuffling and coalesced mapping
 
 In the original paper, a section describes how the data is locally shuffled (sorted) within the workgroups before computing the prefix block sum. This is done in order to address the issue of non-coalseced writing on the global memory.
 By sorting the input data locally, it improves the memory read/write patterns during the final reordering step, resulting in a 36% performance increase in the original paper.
 However, adding this process to my WebGPU implementation didn't seem to have such an impact on the performance. This can be explained by the fact that this paper was designed for an old version of CUDA (2009) and graphics card architectures have evolved since, being more optimized "out of the box" today.
 For this reason, this process is disabled by default, but it can be enabled with the parameter `local_shuffle`.
-
-#### Order checking
-
-To improve performance in cases where the input data is already sorted or nearly sorted, the original paper describes a method that will initially scan the input array before each pass of the algorithm. In the case where the input array is sorted, the algorithm will exit early and prevent unecessary calculations. This can be useful if the data is sorted every frame with few changes between each frame for instance.
-
-In WebGPU however, this check is not as easy to achieve while keeping optimal performances, mainly because every pass and their attributes needs to be encoded prior to being sent to the GPU, without a way to conditionally choose to stop the execution from the GPU.
-
-I've made some tests with a custom `CheckSortKernel` that would do a parallel reduction on the input array to check if it is sorted or not and store the result in a GPU buffer. This way I could use the `dispatchWorkgroupsIndirect` method to dynamically change the number of workgroups that are created for the other pipelines of the algorithm.
-However, I observed a strong negative impact on the performance and it didn't seem to improve already-sorted arrays that much so I preferred not to include it until I find a more optimized way to do it.
 
 ### 2) Parallel Prefix Sum with CUDA
 
@@ -138,8 +178,8 @@ It's disabled by default but can be enabled using the `avoid_bank_conflicts` par
 .
 ├── index.html                          # Demo page for performance profiling
 ├── example
-│   ├── index.js                        # Entry point and example usage
-│   ├── tests.js                        # Utilities for profiling and testing
+│   ├── index.js                        # Demo page entry point
+│   ├── tests.js                        # Utilities for testing
 │
 ├── dist                                # Build output
 │   ├── cjs                             # CommonJS build
@@ -149,11 +189,13 @@ It's disabled by default but can be enabled using the `avoid_bank_conflicts` par
 ├── src                                 # Source code
 │   ├── RadixSortKernel.js              # 4-way Radix Sort kernel definition
 │   ├── PrefixSumKernel.js              # Parallel Prefix Sum kernel definition
+│   ├── CheckSortKernel.js              # Order checking kernel definition
 │   │   
 │   ├── shaders                         # WGSL shader sources as javascript strings
 │       ├── radix_sort.js               # Compute local prefix sums and block sums
 │       ├── radix_sort_reorder.js       # Reorder data to sorted position
-│       ├── prefix_sum.js               # Parallel Prefix Sum (scan) algorithm   
+│       ├── prefix_sum.js               # Parallel Prefix Sum (scan) algorithm  
+│       ├── check_sort.js               # Parallel Order Checking reduction 
 │       │
 │       ├── optimizations               # Contains shaders including optimizations (see "Implementation" section)
 │           ├── radix_sort_local_shuffle.js

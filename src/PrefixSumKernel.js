@@ -1,5 +1,6 @@
 import prefixSumSource from "./shaders/prefix_sum"
 import prefixSumSource_NoBankConflict from "./shaders/optimizations/prefix_sum_no_bank_conflict"
+import { find_optimal_dispatch_size } from "./utils"
 
 class PrefixSumKernel {
     /**
@@ -39,31 +40,14 @@ class PrefixSumKernel {
         this.create_pass_recursive(data, count)
     }
 
-    find_optimal_dispatch_size(item_count) {
-        const { maxComputeWorkgroupsPerDimension } = this.device.limits
-
-        let workgroup_count = Math.ceil(item_count / this.items_per_workgroup)
-        let x = workgroup_count
-        let y = 1
-
-        if (workgroup_count > maxComputeWorkgroupsPerDimension) {
-            x = Math.floor(Math.sqrt(workgroup_count))
-            y = Math.ceil(workgroup_count / x)
-            workgroup_count = x * y
-        }
-
-        return { 
-            workgroup_count,
-            dispatchSize: { x, y },
-        }
-    }
-
     create_pass_recursive(data, count) {
         // Find best dispatch x and y dimensions to minimize unused threads
-        const { workgroup_count, dispatchSize } = this.find_optimal_dispatch_size(count)
+        const workgroup_count = Math.ceil(count / this.items_per_workgroup)
+        const dispatchSize = find_optimal_dispatch_size(this.device, workgroup_count)
         
         // Create buffer for block sums        
         const blockSumBuffer = this.device.createBuffer({
+            label: 'prefix-sum-block-sum',
             size: workgroup_count * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         })
@@ -144,11 +128,17 @@ class PrefixSumKernel {
         }
     }
 
-    dispatch(pass) {
-        for (const { pipeline, bindGroup, dispatchSize } of this.pipelines) {
+    get_dispatch_chain() {
+        return this.pipelines.flatMap(p => [ p.dispatchSize.x, p.dispatchSize.y, 1 ])
+    }
+
+    dispatch(pass, dispatchSize, offset = 0) {
+        for (let i = 0; i < this.pipelines.length; i++) {
+            const { pipeline, bindGroup } = this.pipelines[i]
+            
             pass.setPipeline(pipeline)
             pass.setBindGroup(0, bindGroup)
-            pass.dispatchWorkgroups(dispatchSize.x, dispatchSize.y, 1)
+            pass.dispatchWorkgroupsIndirect(dispatchSize, offset + i * 3 * 4)
         }
     }
 }

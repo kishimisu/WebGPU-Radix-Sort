@@ -2,6 +2,8 @@ import PrefixSumKernel from "./PrefixSumKernel"
 import radixSortSource from "./shaders/radix_sort"
 import radixSortSource_LocalShuffle from "./shaders/optimizations/radix_sort_local_shuffle"
 import reorderSource from "./shaders/radix_sort_reorder"
+import CheckSortKernel from "./CheckSortKernel"
+import { create_buffer_from_data, find_optimal_dispatch_size } from "./utils"
 
 class RadixSortKernel {
     /**
@@ -17,6 +19,7 @@ class RadixSortKernel {
      * @param {number} count - Number of elements to sort
      * @param {number} bit_count - Number of bits per element (default: 32)
      * @param {object} workgroup_size - Workgroup size in x and y dimensions. (x * y) must be a power of two
+     * @param {boolean} check_order - Enable "order checking" optimization. Useful if the data needs to be sorted in real-time and doesn't change much. (default: false)
      * @param {boolean} local_shuffle - Enable "local shuffling" optimization for the radix sort kernel (default: false)
      * @param {boolean} avoid_bank_conflicts - Enable "avoiding bank conflicts" optimization for the prefix sum kernel (default: false)
      */
@@ -27,19 +30,22 @@ class RadixSortKernel {
         count,
         bit_count = 32,
         workgroup_size = { x: 16, y: 16 },
+        check_order = false,
         local_shuffle = false,
         avoid_bank_conflicts = false,
     } = {}) {
         if (device == null) throw new Error('No device provided')
         if (keys == null) throw new Error('No keys buffer provided')
         if (!Number.isInteger(count) || count <= 0) throw new Error('Invalid count parameter')
-        if (!Number.isInteger(bit_count) || bit_count <= 0) throw new Error('Invalid bit_count parameter')
+        if (!Number.isInteger(bit_count) || bit_count <= 0 || bit_count > 32) throw new Error('Invalid bit_count parameter')
         if (!Number.isInteger(workgroup_size.x) || !Number.isInteger(workgroup_size.y)) throw new Error('Invalid workgroup_size parameter')
+        if (bit_count % 4 != 0) throw new Error('bit_count must be a multiple of 4')
 
         this.device = device
         this.count = count
         this.bit_count = bit_count
         this.workgroup_size = workgroup_size
+        this.check_order = check_order
         this.local_shuffle = local_shuffle
         this.avoid_bank_conflicts = avoid_bank_conflicts
 
@@ -53,34 +59,16 @@ class RadixSortKernel {
         this.shaderModules = {} // GPUShaderModules
         this.buffers = {}       // GPUBuffers
         this.pipelines = []     // List of passes
+        this.kernels = {}
 
         // Find best dispatch x and y dimensions to minimize unused threads
-        this.find_optimal_dispatch_size()
+        this.dispatchSize = find_optimal_dispatch_size(this.device, this.workgroup_count)
 
         // Create shader modules from wgsl code
         this.create_shader_modules()
-
-        // Create GPU buffers
-        this.create_buffers(keys, values)
         
         // Create multi-pass pipelines
-        this.create_pipelines()
-    }
-
-    find_optimal_dispatch_size() {
-        const { maxComputeWorkgroupsPerDimension } = this.device.limits
-
-        this.dispatchSize = { 
-            x: this.workgroup_count, 
-            y: 1
-        }
-
-        if (this.workgroup_count > maxComputeWorkgroupsPerDimension) {
-            const x = Math.floor(Math.sqrt(this.workgroup_count))
-            const y = Math.ceil(this.workgroup_count / x)
-            
-            this.dispatchSize = { x, y }            
-        }
+        this.create_pipelines(keys, values)
     }
 
     create_shader_modules() {
@@ -105,41 +93,20 @@ class RadixSortKernel {
         }
     }
 
-    create_buffers(keys, values) {
-        // Keys and values double buffering
-        const tmpKeysBuffer = this.device.createBuffer({
-            size: this.count * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
-        })
-        const tmpValuesBuffer = !this.has_values ? null : this.device.createBuffer({
-            size: this.count * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
-        })
+    create_pipelines(keys, values) {    
+        // Block prefix sum kernel    
+        const { prefixSumKernel, prefixBlockSumBuffer } = this.create_prefix_sum_kernel()
 
-        // Local Prefix Sum buffer (1 element per item)
-        const localPrefixSumBuffer = this.device.createBuffer({
-            size: this.count * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
-        })
+        // Indirect dispatch buffers
+        const dispatchData = this.calculate_dispatch_sizes(prefixSumKernel)
 
-        // Prefix Block Sum buffer (4 element per workgroup)
-        const prefixBlockSumBuffer = this.device.createBuffer({
-            size: this.prefix_block_workgroup_count * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
-        })
-        
-        this.buffers = {
-            keys: keys,
-            values: values,
-            tmpKeys: tmpKeysBuffer,
-            tmpValues: tmpValuesBuffer,
-            localPrefixSum: localPrefixSumBuffer,
-            prefixBlockSum: prefixBlockSumBuffer,
-        }
-    }
+        // GPU buffers
+        this.create_buffers(keys, values, prefixBlockSumBuffer, dispatchData)
 
-    // Create radix sort passes for every 2 bits
-    create_pipelines() {
+        // Check sort kernels
+        this.create_check_sort_kernels(this.buffers.keys, dispatchData)
+
+        // Radix sort passes for every 2 bits
         for (let bit = 0; bit < this.bit_count; bit += 2) {
             // Swap buffers every pass
             const even      = (bit % 4 == 0)
@@ -150,21 +117,185 @@ class RadixSortKernel {
 
             // Compute local prefix sums and block sums
             const blockSumPipeline = this.create_block_sum_pipeline(inKeys, inValues, bit)
-
-            // Compute block sums prefix sums
-            const prefixSumKernel = new PrefixSumKernel({ 
-                device: this.device,
-                data: this.buffers.prefixBlockSum, 
-                count: this.prefix_block_workgroup_count,
-                workgroup_size: this.workgroup_size,
-                avoid_bank_conflicts: this.avoid_bank_conflicts,
-            })
             
             // Reorder keys and values
             const reorderPipeline = this.create_reorder_pipeline(inKeys, inValues, outKeys, outValues, bit)
 
-            this.pipelines.push({ blockSumPipeline, prefixSumKernel, reorderPipeline })
+            this.pipelines.push({ blockSumPipeline, reorderPipeline })
         }
+    }
+
+    create_prefix_sum_kernel() {
+        // Prefix Block Sum buffer (4 element per workgroup)
+        const prefixBlockSumBuffer = this.device.createBuffer({
+            label: 'radix-sort-prefix-block-sum',
+            size: this.prefix_block_workgroup_count * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        })
+
+        // Create block prefix sum kernel
+        const prefixSumKernel = new PrefixSumKernel({ 
+            device: this.device,
+            data: prefixBlockSumBuffer, 
+            count: this.prefix_block_workgroup_count,
+            workgroup_size: this.workgroup_size,
+            avoid_bank_conflicts: this.avoid_bank_conflicts,
+        })
+
+        this.kernels.prefixSum = prefixSumKernel
+
+        return { prefixSumKernel, prefixBlockSumBuffer }
+    }
+
+    calculate_dispatch_sizes(prefixSumKernel) {
+        // Prefix sum dispatch sizes
+        const prefixSumDispatchSize = prefixSumKernel.get_dispatch_chain()
+
+        // Check sort element count (fast/full)
+        const check_sort_fast_count = Math.min(this.count, this.threads_per_workgroup * 4)
+        const check_sort_full_count = this.count - check_sort_fast_count
+        const start_full = check_sort_fast_count - 1
+
+        // Check sort dispatch sizes
+        const dispatchSizesFast = CheckSortKernel.find_optimal_dispatch_chain(this.device, check_sort_fast_count, this.workgroup_size)
+        const dispatchSizesFull = CheckSortKernel.find_optimal_dispatch_chain(this.device, check_sort_full_count, this.workgroup_size)
+
+        // Initial dispatch sizes
+        const initialDispatch = [
+            this.dispatchSize.x, this.dispatchSize.y, 1, // Radix Sort + Reorder
+            ...dispatchSizesFast.slice(0, 3),            // Check sort fast
+            ...prefixSumDispatchSize                     // Prefix Sum
+        ]
+
+        // Dispatch offsets in main buffer
+        this.dispatchOffsets = {
+            radix_sort: 0,
+            check_sort_fast: 3 * 4,
+            prefix_sum: 6 * 4
+        }
+
+        return {
+            initialDispatch,
+            dispatchSizesFull,
+            check_sort_fast_count, 
+            check_sort_full_count, 
+            start_full 
+        }
+    }
+
+    create_buffers(keys, values, prefixBlockSumBuffer, dispatchData) {
+        // Keys and values double buffering
+        const tmpKeysBuffer = this.device.createBuffer({
+            label: 'radix-sort-tmp-keys',
+            size: this.count * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        })
+        const tmpValuesBuffer = !this.has_values ? null : this.device.createBuffer({
+            label: 'radix-sort-tmp-values',
+            size: this.count * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        })
+
+        // Local Prefix Sum buffer (1 element per item)
+        const localPrefixSumBuffer = this.device.createBuffer({
+            label: 'radix-sort-local-prefix-sum',
+            size: this.count * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        })
+
+        // Dispatch sizes (radix sort, check sort, prefix sum)
+        const dispatchBuffer = create_buffer_from_data({
+            device: this.device, 
+            label: 'radix-sort-dispatch-size',
+            data: dispatchData.initialDispatch, 
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.INDIRECT
+        })
+        const originalDispatchBuffer = create_buffer_from_data({
+            device: this.device, 
+            label: 'radix-sort-dispatch-size-original',
+            data: dispatchData.initialDispatch, 
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        })
+
+        // Dispatch sizes (full sort)
+        const checkSortFullDispatchBuffer = create_buffer_from_data({
+            label: 'check-sort-full-dispatch-size',
+            device: this.device, 
+            data: dispatchData.dispatchSizesFull,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.INDIRECT
+        })
+        const checkSortFullOriginalDispatchBuffer = create_buffer_from_data({
+            label: 'check-sort-full-dispatch-size-original',
+            device: this.device, 
+            data: dispatchData.dispatchSizesFull,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        })
+
+        // Flag to tell if the data is sorted
+        const isSortedBuffer = create_buffer_from_data({
+            label: 'is-sorted',
+            device: this.device, 
+            data: new Uint32Array([0]), 
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+        })
+        
+        this.buffers = {
+            keys: keys,
+            values: values,
+            tmpKeys: tmpKeysBuffer,
+            tmpValues: tmpValuesBuffer,
+            localPrefixSum: localPrefixSumBuffer,
+            prefixBlockSum: prefixBlockSumBuffer,
+            
+            dispatchSize: dispatchBuffer,
+            originalDispatchSize: originalDispatchBuffer,
+            checkSortFullDispatchSize: checkSortFullDispatchBuffer,
+            originalCheckSortFullDispatchSize: checkSortFullOriginalDispatchBuffer,
+            isSorted: isSortedBuffer,
+        }
+    }
+
+    create_check_sort_kernels(inKeys, checkSortPartitionData) {
+        // Skip check sort if disabled
+        if (!this.check_order) {
+            return [ null, null ]
+        }
+
+        const { check_sort_fast_count, check_sort_full_count, start_full } = checkSortPartitionData
+
+        // Create the full pass
+        const checkSortFull = new CheckSortKernel({
+            device: this.device,
+            data: inKeys,
+            result: this.buffers.dispatchSize,
+            original: this.buffers.originalDispatchSize,
+            is_sorted: this.buffers.isSorted,
+            count: check_sort_full_count,
+            start: start_full,
+            full_check: true,
+            workgroup_size: this.workgroup_size
+        })
+
+        // Create the fast pass
+        const checkSortFast = new CheckSortKernel({
+            device: this.device,
+            data: inKeys,
+            result: this.buffers.checkSortFullDispatchSize,
+            original: this.buffers.originalCheckSortFullDispatchSize,
+            is_sorted: this.buffers.isSorted,
+            count: check_sort_fast_count,
+            full_check: false,
+            workgroup_size: this.workgroup_size
+        })
+
+        if (checkSortFast.threads_per_workgroup < checkSortFull.pipelines.length) {
+            console.warn(`Warning: workgroup size is too small to enable check sort optimization, disabling...`)
+            this.check_order = false
+            return [ null, null ]
+        }
+
+        this.kernels.checkSortFast = checkSortFast
+        this.kernels.checkSortFull = checkSortFull
     }
 
     create_block_sum_pipeline(inKeys, inValues, bit) {
@@ -347,17 +478,24 @@ class RadixSortKernel {
      * 
      * @param {GPUComputePassEncoder} pass 
      */
-    dispatch(pass) {
-        for (const { blockSumPipeline, prefixSumKernel, reorderPipeline } of this.pipelines) {            
+    dispatch(pass) {        
+        for (let i = 0; i < this.bit_count / 2; i++) {
+            const { blockSumPipeline, reorderPipeline } = this.pipelines[i]
+
+            if (this.check_order && i % 2 == 0) {
+                this.kernels.checkSortFast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast)
+                this.kernels.checkSortFull.dispatch(pass, this.buffers.checkSortFullDispatchSize)
+            }
+            
             pass.setPipeline(blockSumPipeline.pipeline)
             pass.setBindGroup(0, blockSumPipeline.bindGroup)
-            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1)
+            pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort)
 
-            prefixSumKernel.dispatch(pass)
+            this.kernels.prefixSum.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.prefix_sum)
 
             pass.setPipeline(reorderPipeline.pipeline)
             pass.setBindGroup(0, reorderPipeline.bindGroup)
-            pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1)
+            pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort)
         }
     }
 }
