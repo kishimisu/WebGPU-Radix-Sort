@@ -12,9 +12,9 @@ This is a WebGPU implementation for the radix sort algorithm as described in the
 - Supports arrays of arbitrary size
 
 #### Use Cases:
-- You need to sort data directly on the GPU
-- You need to sort a large number of elements (> 100,000 elements) faster than the CPU
-- You need to sort a large number of elements in real-time applications
+- Sort data exclusively on the GPU
+- Sort a large number of elements (> 100,000 elements) faster than the CPU
+- Sort a large number of elements in real-time applications
 
 ### Parallel Prefix Sum (Scan)
 
@@ -41,7 +41,7 @@ npm install webgpu-radix-sort
 <!-- From source -->
 <script src="./dist/umd/radix-sort-umd.js"></script>
 <!-- From CDN -->
-<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.4/dist/umd/radix-sort-umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.5/dist/umd/radix-sort-umd.js"></script>
 <script>
     const { RadixSortKernel } = RadixSort;
 </script>
@@ -53,7 +53,7 @@ npm install webgpu-radix-sort
     // From source
     import { RadixSortKernel } from './dist/esm/radix-sort-esm.js';
     // From CDN
-    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.4/dist/esm/radix-sort-esm.js';
+    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.5/dist/esm/radix-sort-esm.js';
 </script>
 ```
 ## Usage
@@ -132,27 +132,25 @@ For this reason, this process is disabled by default, but it can be enabled with
 
 To improve performance in cases where the input data is already sorted or nearly sorted, the original paper describes a method that will initially scan the input array before each pass of the algorithm. In the case where the input array is sorted, the algorithm will exit early and prevent unecessary calculations. This can be useful if the data is sorted every frame with few changes between each frame for instance.
 
-In WebGPU however, this check is not as easy to achieve while keeping optimal performances, mainly because every pass and their attributes needs to be encoded prior to being sent to the GPU.
+After a few attempts, I managed to implement a version of this check that seem to greatly improve the performance in the case the where the array is already sorted, or when it gets sorted before all the passes finishes.
+This optimization can be enabled with the `check_order` parameter.
 
-After a few attempts, I managed to implement a version of this check that seem to greatly improve the performance in the case the array is already sorted, or when it gets sorted before all the passes finishes.
-This optimization can be enabled with the `check_order` parameter, and you can also test it on the demo page for already sorted arrays.
+Here's a short explanation on how it works:
 
-Here's a broken-down version of how I implemeted it:
+First, I changed the entire dispatching process to use indirect buffers with `dispatchWorkgroupsIndirect` instead of passing the size from the CPU via `dispatchWorkgroups`. This way, I can dynamically change the number of workgroups dispatched for each pipeline directly from the GPU. I noticed however that for the exact same dispatch size, using `dispatchWorkgroupsIndirect` was slightly slower than `dispatchWorkgroups`, so I make use of indirect buffers only when the order checking optimization is enabled.
 
-First, I changed the entire dispatching process to use indirect buffers with `dispatchWorkgroupsIndirect` instead of passing these values from the CPU via `dispatchWorkgroups`. This way, I can dynamically change the number of workgroups dispatched for each pipeline directly from the GPU.
-
-Then, I created a custom `CheckSortKernel` that performs a parallel reduction on an input array to check if it is sorted, and update relevant dispatch buffers accordingly.
-To follow the original paper idea, I created two versions of this kernel: a fast one that checks only a small part of the array, and a full one that checks the entire array.
+Then, I created a custom `CheckSortKernel` that performs a parallel reduction on the input array to check if it is sorted, and update relevant dispatch buffers accordingly.
+To follow the original paper idea, I created two versions of this kernel: a fast one that checks only a small part of the array, and a full one that checks the remaining elements.
 When this optimization is enabled, these two kernels are dispatched every 2 pass before the radix sort pipelines, and will effectively stop the execution of the algorithm if the array is sorted:
 
 
 1. CheckSortKernel (fast):
     - Check for a small part of the array to see if it is sorted (by default this kernel only creates 4 workgroups, so 1024 elements are checked)
-    - If the array isn't sorted, skip the full check (zero out the full check dispatch buffer)
-    - If the array is sorted, run the full check (revert the full check dispatch buffer)
+    - If this region isn't sorted, skip the full check (zero out the full check dispatch buffer)
+    - If this region is sorted, run the full check (revert the full check dispatch buffer)
 
 2. CheckSortKernel (full):
-    - Check the entire array to see if it is sorted
+    - Check the remaining elements to see if they are sorted
     - If the array is sorted, skip the radix sort (zero out the radix sort dispatch buffer) and set a flag in a specific buffer that will skip any further passes
     - If the array isn't sorted, run the radix sort (revert the radix sort dispatch buffer)
 

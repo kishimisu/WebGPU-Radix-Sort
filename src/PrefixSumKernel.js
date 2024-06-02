@@ -132,13 +132,25 @@ class PrefixSumKernel {
         return this.pipelines.flatMap(p => [ p.dispatchSize.x, p.dispatchSize.y, 1 ])
     }
 
-    dispatch(pass, dispatchSize, offset = 0) {
+    /**
+     * Encode the prefix sum pipeline into the current pass.
+     * If dispatchSizeBuffer is provided, the dispatch will be indirect (dispatchWorkgroupsIndirect)
+     * 
+     * @param {GPUComputePassEncoder} pass 
+     * @param {GPUBuffer} dispatchSizeBuffer - (optional) Indirect dispatch buffer
+     * @param {int} offset - (optional) Offset in bytes in the dispatch buffer. Default: 0
+     */
+    dispatch(pass, dispatchSizeBuffer, offset = 0) {
         for (let i = 0; i < this.pipelines.length; i++) {
-            const { pipeline, bindGroup } = this.pipelines[i]
+            const { pipeline, bindGroup, dispatchSize } = this.pipelines[i]
             
             pass.setPipeline(pipeline)
             pass.setBindGroup(0, bindGroup)
-            pass.dispatchWorkgroupsIndirect(dispatchSize, offset + i * 3 * 4)
+
+            if (dispatchSizeBuffer == null)
+                pass.dispatchWorkgroups(dispatchSize.x, dispatchSize.y, 1)
+            else
+                pass.dispatchWorkgroupsIndirect(dispatchSizeBuffer, offset + i * 3 * 4)
         }
     }
 }

@@ -14,8 +14,10 @@ const settings = {
 }
 
 window.onload = async function main() {
+    // Create the Settings panel
     const gui = new GUI()
 
+    // Create the GPU device
     const adapter = await navigator.gpu?.requestAdapter()
     const device = await adapter?.requestDevice({
         requiredFeatures: ['timestamp-query'],
@@ -24,19 +26,25 @@ window.onload = async function main() {
         }
     })
 
+    // Check if WebGPU is supported
     if (!device) {
         document.getElementById('info').innerHTML = 'WebGPU doesn\'t appear to be supported on this device.'
         document.getElementById('info').style.color = '#ff7a48'
         throw new Error('Could not create WebGPU device')
     }
 
+    // Run the tests
     if (false) {
         test_radix_sort(device)
     }
 
+    // Run sort callback
     gui.onClickSort = () => onClickSort(device)
 }
 
+/**
+ * Run the prefix sum kernel and profile the performance
+ */
 async function runSort(device, compare_against_cpu = true) {
     const keys = new Uint32Array(settings.element_count)
     const keys_range = 2 ** settings.bit_count
@@ -131,9 +139,9 @@ class GUI {
 
         this.createHeader()
         this.createTitle('Radix Sort Kernel')
-        this.createSlider(settings, 'element_count', 'Element Count', settings.element_count, 1e4, 2 ** 24, 1, true, false)
-        this.createSlider(settings, 'bit_count', 'Bit Count', settings.bit_count, 4, 32, 4, false, false)
-        this.createSlider(settings, 'workgroup_size', 'Workgroup Size', settings.workgroup_size, 2, 5, 1, false, true)
+        this.createSlider(settings, 'element_count', 'Element Count', settings.element_count, 1e4, 2 ** 24, 1, { logarithmic: true })
+        this.createSlider(settings, 'bit_count', 'Bit Count', settings.bit_count, 4, 32, 4)
+        this.createSlider(settings, 'workgroup_size', 'Workgroup Size', settings.workgroup_size, 2, 5, 1, { power_of_two: true })
     
         this.createTitle('Optimizations')
         this.createCheckbox(settings, 'check_order', 'Check If Sorted', settings.check_order)
@@ -141,9 +149,9 @@ class GUI {
         this.createCheckbox(settings, 'avoid_bank_conflicts', 'Avoid Bank Conflicts', settings.avoid_bank_conflicts)
     
         this.createTitle('Testing')
-        this.createDropdown(settings, 'initial_sort', 'Initial Sort', ['Random', 'Sorted'], 0)
-        this.createDropdown(settings, 'sort_mode', 'Sort Mode', ['Keys', 'Keys & Values'], 0)
-        this.createSlider(settings, 'consecutive_sorts', 'Consecutive Sorts', settings.consecutive_sorts, 1, 20, 1, false, false)
+        this.createDropdown(settings, 'initial_sort', 'Initial Sort', ['Random', 'Sorted'])
+        this.createDropdown(settings, 'sort_mode', 'Sort Mode', ['Keys', 'Keys & Values'])
+        this.createSlider(settings, 'consecutive_sorts', 'Consecutive Sorts', settings.consecutive_sorts, 1, 20, 1)
     
         this.createButton('Run Radix Sort', () => this.onClickSort(device))
 
@@ -186,7 +194,7 @@ class GUI {
         link.target = '_blank'
     }
 
-    createSlider(object, prop, name, value = 0, min = 0, max = 1, step = 0.01, logarithmic = false, power_of_two = false, callback = null) {
+    createSlider(object, prop, name, value = 0, min = 0, max = 1, step = 0.01, {logarithmic = false, power_of_two = false} = {}) {
         const logMin = Math.log(min)
         const logMax = Math.log(max)
         const scale = (logMax - logMin) / (max - min)
@@ -200,17 +208,16 @@ class GUI {
         const val = createElm(input, 'span', 'gui-value', { innerText: prettifyNumber(value) })
 
         slider.addEventListener('input', () => {
-            let newValue = slider.value;
+            let newValue = parseFloat(slider.value)
             if (logarithmic || power_of_two ) {
-                newValue = convert(parseFloat(slider.value))
+                newValue = convert(slider.value)
             }
-            object[prop] = parseFloat(newValue)
+            object[prop] = newValue
             val.innerText = prettifyNumber(newValue)
-            if (callback) callback(parseFloat(newValue))
         })
     }
 
-    createCheckbox(object, prop, name, value = false, callback = null) {
+    createCheckbox(object, prop, name, value = false) {
         const ctn = createElm(this.dom, 'div', 'gui-ctn')
         const label = createElm(ctn, 'label', 'gui-label', { innerText: name })
         const input = createElm(ctn, 'div', 'gui-input')
@@ -219,24 +226,22 @@ class GUI {
         check.addEventListener('change', () => {
             object[prop] = check.checked
             val.innerText = check.checked ? 'true' : 'false'
-            if (callback) callback(check.checked)
         })
     }
 
-    createDropdown(object, prop, name, options, value = 0, callback = null) {
+    createDropdown(object, prop, name, options) {
         const ctn = createElm(this.dom, 'div', 'gui-ctn')
         const label = createElm(ctn, 'label', 'gui-label', { innerText: name })
         const input = createElm(ctn, 'div', 'gui-input')
         const select = createElm(input, 'select', 'gui-select')
-        const val = createElm(input, 'span', 'gui-value', { innerText: options[value] })
+        const val = createElm(input, 'span', 'gui-value', { innerText: object[prop] })
         options.forEach((option, index) => {
             const opt = createElm(select, 'option', '', { innerText: option, value: index })
-            if (index === value) opt.selected = true
+            if (option === object[prop]) opt.selected = true
         })
         select.addEventListener('change', () => {
             object[prop] = options[parseInt(select.value)]
             val.innerText = options[parseInt(select.value)] 
-            if (callback) callback(parseInt(select.value))
         })
     }
 
