@@ -1,4 +1,4 @@
-const checkSortSource = (isFirstPass = false, isLastPass = false, isFullCheck = false) => /* wgsl */ `
+const checkSortSource = (isFirstPass = false, isLastPass = false, kernelMode = 'full') => /* wgsl */ `
 
 @group(0) @binding(0) var<storage, read> input: array<u32>;
 @group(0) @binding(1) var<storage, read_write> output: array<u32>;
@@ -12,6 +12,26 @@ override ELEMENT_COUNT: u32;
 override START_ELEMENT: u32;
 
 var<workgroup> s_data: array<u32, THREADS_PER_WORKGROUP>;
+
+// Reset dispatch buffer and is_sorted flag
+@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
+fn reset(
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
+    @builtin(local_invocation_index) TID: u32, // Local thread ID
+) {
+    if (TID >= ELEMENT_COUNT) {
+        return;
+    }
+
+    if (TID == 0) {
+        is_sorted = 0u;
+    }
+
+    let ELM_ID = TID * 3;
+
+    output[ELM_ID] = original[ELM_ID];
+}
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn check_sort(
@@ -36,7 +56,7 @@ fn check_sort(
     workgroupBarrier();
 
     // Write reduction result
-    ${ isLastPass ? last_pass(isFullCheck) : write_reduction_result }
+    ${ isLastPass ? last_pass(kernelMode) : write_reduction_result }
 }`
 
 const write_reduction_result = /* wgsl */ `
@@ -58,7 +78,7 @@ const first_pass_load_data = /* wgsl */ `
     s_data[TID] = select(0u, 1u, GID < ELEMENT_COUNT-1 && elm > next);
 `
 
-const last_pass = (isFullCheck) => /* wgsl */ `
+const last_pass = (kernelMode) => /* wgsl */ `
     let fullDispatchLength = arrayLength(&output);
     let dispatchIndex = TID * 3;
 
@@ -66,13 +86,15 @@ const last_pass = (isFullCheck) => /* wgsl */ `
         return;
     }
 
-    ${isFullCheck ? last_pass_full : last_pass_fast}
+    ${kernelMode == 'full' ? last_pass_full : last_pass_fast}
 `
 
+// If the fast check kernel is sorted and the data isn't already sorted, run the full check
 const last_pass_fast = /* wgsl */ `
     output[dispatchIndex] = select(0, original[dispatchIndex], s_data[0] == 0 && is_sorted == 0u);
 `
 
+// If the full check kernel is sorted, set the flag to 1 and skip radix sort passes
 const last_pass_full = /* wgsl */ `
     if (TID == 0 && s_data[0] == 0) {
         is_sorted = 1u;

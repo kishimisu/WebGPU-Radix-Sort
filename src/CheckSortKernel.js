@@ -12,7 +12,7 @@ class CheckSortKernel {
      * @param {GPUBuffer} is_sorted - 1-element buffer to store whether the array is sorted
      * @param {number} count - The number of elements to check
      * @param {number} start - The index to start checking from
-     * @param {boolean} full_check - Whether this kernel is performing a full check or a fast check
+     * @param {boolean} mode - The type of check sort kernel ('reset', 'fast', 'full')
      * @param {object} workgroup_size - The workgroup size in x and y dimensions
      */
     constructor({
@@ -23,13 +23,13 @@ class CheckSortKernel {
         is_sorted,
         count,
         start = 0,
-        full_check = true,
+        mode = 'full',
         workgroup_size = { x: 16, y: 16 },
     }) {
         this.device = device
         this.count = count
         this.start = start
-        this.full_check = full_check
+        this.mode = mode
         this.workgroup_size = workgroup_size
         this.threads_per_workgroup = workgroup_size.x * workgroup_size.y
 
@@ -71,8 +71,10 @@ class CheckSortKernel {
         const isFirstPass = passIndex === 0
         const isLastPass = workgroup_count <= 1
 
+        const label = `check-sort-${this.mode}-${passIndex}`
+
         const outputBuffer = isLastPass ? this.buffers.result : this.device.createBuffer({
-            label: `check-sort-${this.full_check ? 'full' : 'fast'}-${passIndex}`,
+            label: label,
             size: workgroup_count * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         })
@@ -135,16 +137,18 @@ class CheckSortKernel {
             layout: pipelineLayout,
             compute: {
                 module: this.device.createShaderModule({
-                    code: checkSortSource(isFirstPass, isLastPass, this.full_check),
-                    label: 'check-sort',
+                    label: label,
+                    code: checkSortSource(isFirstPass, isLastPass, this.mode),
                 }),
-                entryPoint: 'check_sort',
+                entryPoint: this.mode == 'reset' ? 'reset' : 'check_sort',
                 constants: {
+                    'ELEMENT_COUNT': element_count,
                     'WORKGROUP_SIZE_X': this.workgroup_size.x,
                     'WORKGROUP_SIZE_Y': this.workgroup_size.y,
-                    'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
-                    'ELEMENT_COUNT': element_count,
-                    'START_ELEMENT': start_element,
+                    ...(this.mode != 'reset' && { 
+                        'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
+                        'START_ELEMENT': start_element,
+                    })
                 },
             }
         })
@@ -161,7 +165,7 @@ class CheckSortKernel {
         for (let i = 0; i < this.pipelines.length; i++) {
             const { pipeline, bindGroup } = this.pipelines[i]
 
-            const dispatchIndirect = (this.full_check || i < this.pipelines.length - 1)
+            const dispatchIndirect = this.mode != 'reset' && (this.mode == 'full' || i < this.pipelines.length - 1)
 
             pass.setPipeline(pipeline)
             pass.setBindGroup(0, bindGroup)
@@ -169,7 +173,7 @@ class CheckSortKernel {
             if (dispatchIndirect)
                 pass.dispatchWorkgroupsIndirect(dispatchSize, offset + i * 3 * 4)
             else
-                // Only the last dispatch of the fast check kernel is constant to (1, 1, 1)
+                // Only the reset kernel and the last dispatch of the fast check kernel are constant to (1, 1, 1)
                 pass.dispatchWorkgroups(1, 1, 1)
         }
     }

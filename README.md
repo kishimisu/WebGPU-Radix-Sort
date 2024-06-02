@@ -41,7 +41,7 @@ npm install webgpu-radix-sort
 <!-- From source -->
 <script src="./dist/umd/radix-sort-umd.js"></script>
 <!-- From CDN -->
-<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.5/dist/umd/radix-sort-umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.6/dist/umd/radix-sort-umd.js"></script>
 <script>
     const { RadixSortKernel } = RadixSort;
 </script>
@@ -53,7 +53,7 @@ npm install webgpu-radix-sort
     // From source
     import { RadixSortKernel } from './dist/esm/radix-sort-esm.js';
     // From CDN
-    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.5/dist/esm/radix-sort-esm.js';
+    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.6/dist/esm/radix-sort-esm.js';
 </script>
 ```
 ## Usage
@@ -74,7 +74,7 @@ const radixSortKernel = new RadixSortKernel({
     keys: keysBuffer,                 // GPUBuffer containing the keys to sort
     values: valuesBuffer,             // (optional) GPUBuffer containing the associated values
     count: keys.length,               // Number of elements to sort
-    check_order: true,                // Exit early if the input is sorted (can improve real-time applications)
+    check_order: false,               // Whether to check if the input is already sorted to exit early
     bit_count: 32,                    // Number of bits per element. Must be a multiple of 4 (default: 32)
     workgroup_size: { x: 16, y: 16 }, // Workgroup size in x and y dimensions. (x * y) must be a power of two
 })
@@ -132,7 +132,7 @@ For this reason, this process is disabled by default, but it can be enabled with
 
 To improve performance in cases where the input data is already sorted or nearly sorted, the original paper describes a method that will initially scan the input array before each pass of the algorithm. In the case where the input array is sorted, the algorithm will exit early and prevent unecessary calculations. This can be useful if the data is sorted every frame with few changes between each frame for instance.
 
-After a few attempts, I managed to implement a version of this check that seem to greatly improve the performance in the case the where the array is already sorted, or when it gets sorted before all the passes finishes.
+After a few attempts, I managed to implement a version of this check that seem to improve the performance in the case the where the array is already sorted, or when it gets sorted before all the passes finishes.
 This optimization can be enabled with the `check_order` parameter.
 
 Here's a short explanation on how it works:
