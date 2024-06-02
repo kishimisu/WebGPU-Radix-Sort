@@ -12,8 +12,18 @@
   function _arrayWithoutHoles(r) {
     if (Array.isArray(r)) return _arrayLikeToArray(r);
   }
+  function _assertClassBrand(e, t, n) {
+    if ("function" == typeof e ? e === t : e.has(t)) return arguments.length < 3 ? t : n;
+    throw new TypeError("Private element is not present on this object");
+  }
+  function _checkPrivateRedeclaration(e, t) {
+    if (t.has(e)) throw new TypeError("Cannot initialize the same private elements twice on an object");
+  }
   function _classCallCheck(a, n) {
     if (!(a instanceof n)) throw new TypeError("Cannot call a class as a function");
+  }
+  function _classPrivateMethodInitSpec(e, a) {
+    _checkPrivateRedeclaration(e, a), a.add(e);
   }
   function _defineProperties(e, r) {
     for (var t = 0; t < r.length; t++) {
@@ -243,17 +253,27 @@
           return [p.dispatchSize.x, p.dispatchSize.y, 1];
         });
       }
+
+      /**
+       * Encode the prefix sum pipeline into the current pass.
+       * If dispatchSizeBuffer is provided, the dispatch will be indirect (dispatchWorkgroupsIndirect)
+       * 
+       * @param {GPUComputePassEncoder} pass 
+       * @param {GPUBuffer} dispatchSizeBuffer - (optional) Indirect dispatch buffer
+       * @param {int} offset - (optional) Offset in bytes in the dispatch buffer. Default: 0
+       */
     }, {
       key: "dispatch",
-      value: function dispatch(pass, dispatchSize) {
+      value: function dispatch(pass, dispatchSizeBuffer) {
         var offset = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : 0;
         for (var i = 0; i < this.pipelines.length; i++) {
           var _this$pipelines$i = this.pipelines[i],
             pipeline = _this$pipelines$i.pipeline,
-            bindGroup = _this$pipelines$i.bindGroup;
+            bindGroup = _this$pipelines$i.bindGroup,
+            dispatchSize = _this$pipelines$i.dispatchSize;
           pass.setPipeline(pipeline);
           pass.setBindGroup(0, bindGroup);
-          pass.dispatchWorkgroupsIndirect(dispatchSize, offset + i * 3 * 4);
+          if (dispatchSizeBuffer == null) pass.dispatchWorkgroups(dispatchSize.x, dispatchSize.y, 1);else pass.dispatchWorkgroupsIndirect(dispatchSizeBuffer, offset + i * 3 * 4);
         }
       }
     }]);
@@ -462,6 +482,7 @@
     }]);
   }();
 
+  var _RadixSortKernel_brand = /*#__PURE__*/new WeakSet();
   var RadixSortKernel = /*#__PURE__*/function () {
     /**
      * Perform a parallel radix sort on the GPU given a buffer of keys and (optionnaly) values
@@ -500,10 +521,14 @@
         _ref$avoid_bank_confl = _ref.avoid_bank_conflicts,
         avoid_bank_conflicts = _ref$avoid_bank_confl === void 0 ? false : _ref$avoid_bank_confl;
       _classCallCheck(this, RadixSortKernel);
+      /**
+       * Dispatch workgroups from CPU args
+       */
+      _classPrivateMethodInitSpec(this, _RadixSortKernel_brand);
       if (device == null) throw new Error('No device provided');
       if (keys == null) throw new Error('No keys buffer provided');
       if (!Number.isInteger(count) || count <= 0) throw new Error('Invalid count parameter');
-      if (!Number.isInteger(bit_count) || bit_count <= 0 || bit_count > 32) throw new Error('Invalid bit_count parameter');
+      if (!Number.isInteger(bit_count) || bit_count <= 0 || bit_count > 32) throw new Error("Invalid bit_count parameter: ".concat(bit_count));
       if (!Number.isInteger(workgroup_size.x) || !Number.isInteger(workgroup_size.y)) throw new Error('Invalid workgroup_size parameter');
       if (bit_count % 4 != 0) throw new Error('bit_count must be a multiple of 4');
       this.device = device;
@@ -520,18 +545,19 @@
 
       this.dispatchSize = {}; // Dispatch dimension x and y
       this.shaderModules = {}; // GPUShaderModules
-      this.buffers = {}; // GPUBuffers
+      this.kernels = {}; // PrefixSumKernel & CheckSortKernels
       this.pipelines = []; // List of passes
-      this.kernels = {};
-
-      // Find best dispatch x and y dimensions to minimize unused threads
-      this.dispatchSize = find_optimal_dispatch_size(this.device, this.workgroup_count);
+      this.buffers = {
+        // GPUBuffers
+        keys: keys,
+        values: values
+      };
 
       // Create shader modules from wgsl code
       this.create_shader_modules();
 
       // Create multi-pass pipelines
-      this.create_pipelines(keys, values);
+      this.create_pipelines();
     }
     return _createClass(RadixSortKernel, [{
       key: "create_shader_modules",
@@ -556,20 +582,18 @@
       }
     }, {
       key: "create_pipelines",
-      value: function create_pipelines(keys, values) {
+      value: function create_pipelines() {
         // Block prefix sum kernel    
-        var _this$create_prefix_s = this.create_prefix_sum_kernel(),
-          prefixSumKernel = _this$create_prefix_s.prefixSumKernel,
-          prefixBlockSumBuffer = _this$create_prefix_s.prefixBlockSumBuffer;
+        this.create_prefix_sum_kernel();
 
         // Indirect dispatch buffers
-        var dispatchData = this.calculate_dispatch_sizes(prefixSumKernel);
+        var dispatchData = this.calculate_dispatch_sizes();
 
         // GPU buffers
-        this.create_buffers(keys, values, prefixBlockSumBuffer, dispatchData);
+        this.create_buffers(dispatchData);
 
         // Check sort kernels
-        this.create_check_sort_kernels(this.buffers.keys, dispatchData);
+        this.create_check_sort_kernels(dispatchData);
 
         // Radix sort passes for every 2 bits
         for (var bit = 0; bit < this.bit_count; bit += 2) {
@@ -610,16 +634,16 @@
           avoid_bank_conflicts: this.avoid_bank_conflicts
         });
         this.kernels.prefixSum = prefixSumKernel;
-        return {
-          prefixSumKernel: prefixSumKernel,
-          prefixBlockSumBuffer: prefixBlockSumBuffer
-        };
+        this.buffers.prefixBlockSum = prefixBlockSumBuffer;
       }
     }, {
       key: "calculate_dispatch_sizes",
-      value: function calculate_dispatch_sizes(prefixSumKernel) {
+      value: function calculate_dispatch_sizes() {
+        // Radix sort dispatch size
+        var dispatchSize = find_optimal_dispatch_size(this.device, this.workgroup_count);
+
         // Prefix sum dispatch sizes
-        var prefixSumDispatchSize = prefixSumKernel.get_dispatch_chain();
+        var prefixSumDispatchSize = this.kernels.prefixSum.get_dispatch_chain();
 
         // Check sort element count (fast/full)
         var check_sort_fast_count = Math.min(this.count, this.threads_per_workgroup * 4);
@@ -631,7 +655,7 @@
         var dispatchSizesFull = CheckSortKernel.find_optimal_dispatch_chain(this.device, check_sort_full_count, this.workgroup_size);
 
         // Initial dispatch sizes
-        var initialDispatch = [this.dispatchSize.x, this.dispatchSize.y, 1].concat(_toConsumableArray(dispatchSizesFast.slice(0, 3)), _toConsumableArray(prefixSumDispatchSize));
+        var initialDispatch = [dispatchSize.x, dispatchSize.y, 1].concat(_toConsumableArray(dispatchSizesFast.slice(0, 3)), _toConsumableArray(prefixSumDispatchSize));
 
         // Dispatch offsets in main buffer
         this.dispatchOffsets = {
@@ -639,6 +663,7 @@
           check_sort_fast: 3 * 4,
           prefix_sum: 6 * 4
         };
+        this.dispatchSize = dispatchSize;
         return {
           initialDispatch: initialDispatch,
           dispatchSizesFull: dispatchSizesFull,
@@ -649,7 +674,7 @@
       }
     }, {
       key: "create_buffers",
-      value: function create_buffers(keys, values, prefixBlockSumBuffer, dispatchData) {
+      value: function create_buffers(dispatchData) {
         // Keys and values double buffering
         var tmpKeysBuffer = this.device.createBuffer({
           label: 'radix-sort-tmp-keys',
@@ -668,6 +693,14 @@
           size: this.count * 4,
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         });
+        this.buffers.tmpKeys = tmpKeysBuffer;
+        this.buffers.tmpValues = tmpValuesBuffer;
+        this.buffers.localPrefixSum = localPrefixSumBuffer;
+
+        // Only create indirect dispatch buffers when check_order optimization is enabled
+        if (!this.check_order) {
+          return;
+        }
 
         // Dispatch sizes (radix sort, check sort, prefix sum)
         var dispatchBuffer = create_buffer_from_data({
@@ -704,26 +737,17 @@
           data: new Uint32Array([0]),
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         });
-        this.buffers = {
-          keys: keys,
-          values: values,
-          tmpKeys: tmpKeysBuffer,
-          tmpValues: tmpValuesBuffer,
-          localPrefixSum: localPrefixSumBuffer,
-          prefixBlockSum: prefixBlockSumBuffer,
-          dispatchSize: dispatchBuffer,
-          originalDispatchSize: originalDispatchBuffer,
-          checkSortFullDispatchSize: checkSortFullDispatchBuffer,
-          originalCheckSortFullDispatchSize: checkSortFullOriginalDispatchBuffer,
-          isSorted: isSortedBuffer
-        };
+        this.buffers.dispatchSize = dispatchBuffer;
+        this.buffers.originalDispatchSize = originalDispatchBuffer;
+        this.buffers.checkSortFullDispatchSize = checkSortFullDispatchBuffer;
+        this.buffers.originalCheckSortFullDispatchSize = checkSortFullOriginalDispatchBuffer;
+        this.buffers.isSorted = isSortedBuffer;
       }
     }, {
       key: "create_check_sort_kernels",
-      value: function create_check_sort_kernels(inKeys, checkSortPartitionData) {
-        // Skip check sort if disabled
+      value: function create_check_sort_kernels(checkSortPartitionData) {
         if (!this.check_order) {
-          return [null, null];
+          return;
         }
         var check_sort_fast_count = checkSortPartitionData.check_sort_fast_count,
           check_sort_full_count = checkSortPartitionData.check_sort_full_count,
@@ -732,7 +756,7 @@
         // Create the full pass
         var checkSortFull = new CheckSortKernel({
           device: this.device,
-          data: inKeys,
+          data: this.buffers.keys,
           result: this.buffers.dispatchSize,
           original: this.buffers.originalDispatchSize,
           is_sorted: this.buffers.isSorted,
@@ -745,7 +769,7 @@
         // Create the fast pass
         var checkSortFast = new CheckSortKernel({
           device: this.device,
-          data: inKeys,
+          data: this.buffers.keys,
           result: this.buffers.checkSortFullDispatchSize,
           original: this.buffers.originalCheckSortFullDispatchSize,
           is_sorted: this.buffers.isSorted,
@@ -756,7 +780,7 @@
         if (checkSortFast.threads_per_workgroup < checkSortFull.pipelines.length) {
           console.warn("Warning: workgroup size is too small to enable check sort optimization, disabling...");
           this.check_order = false;
-          return [null, null];
+          return;
         }
         this.kernels.checkSortFast = checkSortFast;
         this.kernels.checkSortFull = checkSortFull;
@@ -950,25 +974,49 @@
     }, {
       key: "dispatch",
       value: function dispatch(pass) {
-        for (var i = 0; i < this.bit_count / 2; i++) {
-          var _this$pipelines$i = this.pipelines[i],
-            blockSumPipeline = _this$pipelines$i.blockSumPipeline,
-            reorderPipeline = _this$pipelines$i.reorderPipeline;
-          if (this.check_order && i % 2 == 0) {
-            this.kernels.checkSortFast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast);
-            this.kernels.checkSortFull.dispatch(pass, this.buffers.checkSortFullDispatchSize);
-          }
-          pass.setPipeline(blockSumPipeline.pipeline);
-          pass.setBindGroup(0, blockSumPipeline.bindGroup);
-          pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);
-          this.kernels.prefixSum.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.prefix_sum);
-          pass.setPipeline(reorderPipeline.pipeline);
-          pass.setBindGroup(0, reorderPipeline.bindGroup);
-          pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);
+        if (!this.check_order) {
+          _assertClassBrand(_RadixSortKernel_brand, this, _dispatchPipelines).call(this, pass);
+        } else {
+          _assertClassBrand(_RadixSortKernel_brand, this, _dispatchPipelinesIndirect).call(this, pass);
         }
       }
     }]);
   }();
+  function _dispatchPipelines(pass) {
+    for (var i = 0; i < this.bit_count / 2; i++) {
+      var _this$pipelines$i = this.pipelines[i],
+        blockSumPipeline = _this$pipelines$i.blockSumPipeline,
+        reorderPipeline = _this$pipelines$i.reorderPipeline;
+      pass.setPipeline(blockSumPipeline.pipeline);
+      pass.setBindGroup(0, blockSumPipeline.bindGroup);
+      pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
+      this.kernels.prefixSum.dispatch(pass);
+      pass.setPipeline(reorderPipeline.pipeline);
+      pass.setBindGroup(0, reorderPipeline.bindGroup);
+      pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
+    }
+  }
+  /**
+   * Dispatch workgroups from indirect GPU buffers
+   */
+  function _dispatchPipelinesIndirect(pass) {
+    for (var i = 0; i < this.bit_count / 2; i++) {
+      var _this$pipelines$i2 = this.pipelines[i],
+        blockSumPipeline = _this$pipelines$i2.blockSumPipeline,
+        reorderPipeline = _this$pipelines$i2.reorderPipeline;
+      if (this.check_order && i % 2 == 0) {
+        this.kernels.checkSortFast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast);
+        this.kernels.checkSortFull.dispatch(pass, this.buffers.checkSortFullDispatchSize);
+      }
+      pass.setPipeline(blockSumPipeline.pipeline);
+      pass.setBindGroup(0, blockSumPipeline.bindGroup);
+      pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);
+      this.kernels.prefixSum.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.prefix_sum);
+      pass.setPipeline(reorderPipeline.pipeline);
+      pass.setBindGroup(0, reorderPipeline.bindGroup);
+      pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);
+    }
+  }
 
   exports.PrefixSumKernel = PrefixSumKernel;
   exports.RadixSortKernel = RadixSortKernel;
