@@ -36,11 +36,40 @@
       writable: !1
     }), e;
   }
+  function _defineProperty(e, r, t) {
+    return (r = _toPropertyKey(r)) in e ? Object.defineProperty(e, r, {
+      value: t,
+      enumerable: !0,
+      configurable: !0,
+      writable: !0
+    }) : e[r] = t, e;
+  }
   function _iterableToArray(r) {
     if ("undefined" != typeof Symbol && null != r[Symbol.iterator] || null != r["@@iterator"]) return Array.from(r);
   }
   function _nonIterableSpread() {
     throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
+  }
+  function ownKeys(e, r) {
+    var t = Object.keys(e);
+    if (Object.getOwnPropertySymbols) {
+      var o = Object.getOwnPropertySymbols(e);
+      r && (o = o.filter(function (r) {
+        return Object.getOwnPropertyDescriptor(e, r).enumerable;
+      })), t.push.apply(t, o);
+    }
+    return t;
+  }
+  function _objectSpread2(e) {
+    for (var r = 1; r < arguments.length; r++) {
+      var t = null != arguments[r] ? arguments[r] : {};
+      r % 2 ? ownKeys(Object(t), !0).forEach(function (r) {
+        _defineProperty(e, r, t[r]);
+      }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) {
+        Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r));
+      });
+    }
+    return e;
   }
   function _toConsumableArray(r) {
     return _arrayWithoutHoles(r) || _iterableToArray(r) || _unsupportedIterableToArray(r) || _nonIterableSpread();
@@ -293,15 +322,19 @@
   var checkSortSource = function checkSortSource() {
     var isFirstPass = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : false;
     var isLastPass = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : false;
-    var isFullCheck = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : false;
-    return /* wgsl */"\n\n@group(0) @binding(0) var<storage, read> input: array<u32>;\n@group(0) @binding(1) var<storage, read_write> output: array<u32>;\n@group(0) @binding(2) var<storage, read> original: array<u32>;\n@group(0) @binding(3) var<storage, read_write> is_sorted: u32;\n\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride ELEMENT_COUNT: u32;\noverride START_ELEMENT: u32;\n\nvar<workgroup> s_data: array<u32, THREADS_PER_WORKGROUP>;\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn check_sort(\n    @builtin(workgroup_id) w_id: vec3<u32>,\n    @builtin(num_workgroups) w_dim: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;\n    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP + START_ELEMENT;\n    let GID = TID + WID; // Global thread ID\n\n    // Load data into shared memory\n    ".concat(isFirstPass ? first_pass_load_data : "s_data[TID] = select(0u, input[GID], GID < ELEMENT_COUNT);", "\n\n    // Perform parallel reduction\n    for (var d = 1u; d < THREADS_PER_WORKGROUP; d *= 2u) {      \n        workgroupBarrier();  \n        if (TID % (2u * d) == 0u) {\n            s_data[TID] += s_data[TID + d];\n        }\n    }\n    workgroupBarrier();\n\n    // Write reduction result\n    ").concat(isLastPass ? last_pass(isFullCheck) : write_reduction_result, "\n}");
+    var kernelMode = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : 'full';
+    return /* wgsl */"\n\n@group(0) @binding(0) var<storage, read> input: array<u32>;\n@group(0) @binding(1) var<storage, read_write> output: array<u32>;\n@group(0) @binding(2) var<storage, read> original: array<u32>;\n@group(0) @binding(3) var<storage, read_write> is_sorted: u32;\n\noverride WORKGROUP_SIZE_X: u32;\noverride WORKGROUP_SIZE_Y: u32;\noverride THREADS_PER_WORKGROUP: u32;\noverride ELEMENT_COUNT: u32;\noverride START_ELEMENT: u32;\n\nvar<workgroup> s_data: array<u32, THREADS_PER_WORKGROUP>;\n\n// Reset dispatch buffer and is_sorted flag\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn reset(\n    @builtin(workgroup_id) w_id: vec3<u32>,\n    @builtin(num_workgroups) w_dim: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    if (TID >= ELEMENT_COUNT) {\n        return;\n    }\n\n    if (TID == 0) {\n        is_sorted = 0u;\n    }\n\n    let ELM_ID = TID * 3;\n\n    output[ELM_ID] = original[ELM_ID];\n}\n\n@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)\nfn check_sort(\n    @builtin(workgroup_id) w_id: vec3<u32>,\n    @builtin(num_workgroups) w_dim: vec3<u32>,\n    @builtin(local_invocation_index) TID: u32, // Local thread ID\n) {\n    let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;\n    let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP + START_ELEMENT;\n    let GID = TID + WID; // Global thread ID\n\n    // Load data into shared memory\n    ".concat(isFirstPass ? first_pass_load_data : "s_data[TID] = select(0u, input[GID], GID < ELEMENT_COUNT);", "\n\n    // Perform parallel reduction\n    for (var d = 1u; d < THREADS_PER_WORKGROUP; d *= 2u) {      \n        workgroupBarrier();  \n        if (TID % (2u * d) == 0u) {\n            s_data[TID] += s_data[TID + d];\n        }\n    }\n    workgroupBarrier();\n\n    // Write reduction result\n    ").concat(isLastPass ? last_pass(kernelMode) : write_reduction_result, "\n}");
   };
   var write_reduction_result = /* wgsl */"\n    if (TID == 0) {\n        output[WORKGROUP_ID] = s_data[0];\n    }\n";
   var first_pass_load_data = /* wgsl */"\n    let LAST_THREAD = min(THREADS_PER_WORKGROUP, ELEMENT_COUNT - WID) - 1;\n\n    // Load current element into shared memory\n    // Also load next element for comparison\n    let elm = select(0u, input[GID], GID < ELEMENT_COUNT);\n    let next = select(0u, input[GID + 1], GID < ELEMENT_COUNT-1);\n    s_data[TID] = elm;\n    workgroupBarrier();\n\n    s_data[TID] = select(0u, 1u, GID < ELEMENT_COUNT-1 && elm > next);\n";
-  var last_pass = function last_pass(isFullCheck) {
-    return /* wgsl */"\n    let fullDispatchLength = arrayLength(&output);\n    let dispatchIndex = TID * 3;\n\n    if (dispatchIndex >= fullDispatchLength) {\n        return;\n    }\n\n    ".concat(isFullCheck ? last_pass_full : last_pass_fast, "\n");
+  var last_pass = function last_pass(kernelMode) {
+    return /* wgsl */"\n    let fullDispatchLength = arrayLength(&output);\n    let dispatchIndex = TID * 3;\n\n    if (dispatchIndex >= fullDispatchLength) {\n        return;\n    }\n\n    ".concat(kernelMode == 'full' ? last_pass_full : last_pass_fast, "\n");
   };
+
+  // If the fast check kernel is sorted and the data isn't already sorted, run the full check
   var last_pass_fast = /* wgsl */"\n    output[dispatchIndex] = select(0, original[dispatchIndex], s_data[0] == 0 && is_sorted == 0u);\n";
+
+  // If the full check kernel is sorted, set the flag to 1 and skip radix sort passes
   var last_pass_full = /* wgsl */"\n    if (TID == 0 && s_data[0] == 0) {\n        is_sorted = 1u;\n    }\n\n    output[dispatchIndex] = select(0, original[dispatchIndex], s_data[0] != 0);\n";
 
   var CheckSortKernel = /*#__PURE__*/function () {
@@ -315,7 +348,7 @@
      * @param {GPUBuffer} is_sorted - 1-element buffer to store whether the array is sorted
      * @param {number} count - The number of elements to check
      * @param {number} start - The index to start checking from
-     * @param {boolean} full_check - Whether this kernel is performing a full check or a fast check
+     * @param {boolean} mode - The type of check sort kernel ('reset', 'fast', 'full')
      * @param {object} workgroup_size - The workgroup size in x and y dimensions
      */
     function CheckSortKernel(_ref) {
@@ -327,8 +360,8 @@
         count = _ref.count,
         _ref$start = _ref.start,
         start = _ref$start === void 0 ? 0 : _ref$start,
-        _ref$full_check = _ref.full_check,
-        full_check = _ref$full_check === void 0 ? true : _ref$full_check,
+        _ref$mode = _ref.mode,
+        mode = _ref$mode === void 0 ? 'full' : _ref$mode,
         _ref$workgroup_size = _ref.workgroup_size,
         workgroup_size = _ref$workgroup_size === void 0 ? {
           x: 16,
@@ -338,7 +371,7 @@
       this.device = device;
       this.count = count;
       this.start = start;
-      this.full_check = full_check;
+      this.mode = mode;
       this.workgroup_size = workgroup_size;
       this.threads_per_workgroup = workgroup_size.x * workgroup_size.y;
       this.pipelines = [];
@@ -360,8 +393,9 @@
         var workgroup_count = Math.ceil(count / this.threads_per_workgroup);
         var isFirstPass = passIndex === 0;
         var isLastPass = workgroup_count <= 1;
+        var label = "check-sort-".concat(this.mode, "-").concat(passIndex);
         var outputBuffer = isLastPass ? this.buffers.result : this.device.createBuffer({
-          label: "check-sort-".concat(this.full_check ? 'full' : 'fast', "-").concat(passIndex),
+          label: label,
           size: workgroup_count * 4,
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         });
@@ -425,17 +459,18 @@
           layout: pipelineLayout,
           compute: {
             module: this.device.createShaderModule({
-              code: checkSortSource(isFirstPass, isLastPass, this.full_check),
-              label: 'check-sort'
+              label: label,
+              code: checkSortSource(isFirstPass, isLastPass, this.mode)
             }),
-            entryPoint: 'check_sort',
-            constants: {
-              'WORKGROUP_SIZE_X': this.workgroup_size.x,
-              'WORKGROUP_SIZE_Y': this.workgroup_size.y,
-              'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
+            entryPoint: this.mode == 'reset' ? 'reset' : 'check_sort',
+            constants: _objectSpread2({
               'ELEMENT_COUNT': element_count,
+              'WORKGROUP_SIZE_X': this.workgroup_size.x,
+              'WORKGROUP_SIZE_Y': this.workgroup_size.y
+            }, this.mode != 'reset' && {
+              'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
               'START_ELEMENT': start_element
-            }
+            })
           }
         });
         this.buffers.outputs.push(outputBuffer);
@@ -455,11 +490,11 @@
           var _this$pipelines$i = this.pipelines[i],
             pipeline = _this$pipelines$i.pipeline,
             bindGroup = _this$pipelines$i.bindGroup;
-          var dispatchIndirect = this.full_check || i < this.pipelines.length - 1;
+          var dispatchIndirect = this.mode != 'reset' && (this.mode == 'full' || i < this.pipelines.length - 1);
           pass.setPipeline(pipeline);
           pass.setBindGroup(0, bindGroup);
           if (dispatchIndirect) pass.dispatchWorkgroupsIndirect(dispatchSize, offset + i * 3 * 4);else
-            // Only the last dispatch of the fast check kernel is constant to (1, 1, 1)
+            // Only the reset kernel and the last dispatch of the fast check kernel are constant to (1, 1, 1)
             pass.dispatchWorkgroups(1, 1, 1);
         }
       }
@@ -497,7 +532,7 @@
      * @param {number} count - Number of elements to sort
      * @param {number} bit_count - Number of bits per element (default: 32)
      * @param {object} workgroup_size - Workgroup size in x and y dimensions. (x * y) must be a power of two
-     * @param {boolean} check_order - Enable "order checking" optimization. Useful if the data needs to be sorted in real-time and doesn't change much. (default: false)
+     * @param {boolean} check_order - Enable "order checking" optimization. Can improve performance if the data needs to be sorted in real-time and doesn't change much. (default: false)
      * @param {boolean} local_shuffle - Enable "local shuffling" optimization for the radix sort kernel (default: false)
      * @param {boolean} avoid_bank_conflicts - Enable "avoiding bank conflicts" optimization for the prefix sum kernel (default: false)
      */
@@ -664,6 +699,7 @@
           prefix_sum: 6 * 4
         };
         this.dispatchSize = dispatchSize;
+        this.initialDispatch = initialDispatch;
         return {
           initialDispatch: initialDispatch,
           dispatchSizesFull: dispatchSizesFull,
@@ -755,6 +791,7 @@
 
         // Create the full pass
         var checkSortFull = new CheckSortKernel({
+          mode: 'full',
           device: this.device,
           data: this.buffers.keys,
           result: this.buffers.dispatchSize,
@@ -762,28 +799,43 @@
           is_sorted: this.buffers.isSorted,
           count: check_sort_full_count,
           start: start_full,
-          full_check: true,
           workgroup_size: this.workgroup_size
         });
 
         // Create the fast pass
         var checkSortFast = new CheckSortKernel({
+          mode: 'fast',
           device: this.device,
           data: this.buffers.keys,
           result: this.buffers.checkSortFullDispatchSize,
           original: this.buffers.originalCheckSortFullDispatchSize,
           is_sorted: this.buffers.isSorted,
           count: check_sort_fast_count,
-          full_check: false,
           workgroup_size: this.workgroup_size
         });
-        if (checkSortFast.threads_per_workgroup < checkSortFull.pipelines.length) {
+        var initialDispatchElementCount = this.initialDispatch.length / 3;
+        if (checkSortFast.threads_per_workgroup < checkSortFull.pipelines.length || checkSortFull.threads_per_workgroup < initialDispatchElementCount) {
           console.warn("Warning: workgroup size is too small to enable check sort optimization, disabling...");
           this.check_order = false;
           return;
         }
-        this.kernels.checkSortFast = checkSortFast;
-        this.kernels.checkSortFull = checkSortFull;
+
+        // Create the reset pass
+        var checkSortReset = new CheckSortKernel({
+          mode: 'reset',
+          device: this.device,
+          data: this.buffers.keys,
+          original: this.buffers.originalDispatchSize,
+          result: this.buffers.dispatchSize,
+          is_sorted: this.buffers.isSorted,
+          count: initialDispatchElementCount,
+          workgroup_size: find_optimal_dispatch_size(this.device, initialDispatchElementCount)
+        });
+        this.kernels.checkSort = {
+          reset: checkSortReset,
+          fast: checkSortFast,
+          full: checkSortFull
+        };
       }
     }, {
       key: "create_block_sum_pipeline",
@@ -987,31 +1039,46 @@
       var _this$pipelines$i = this.pipelines[i],
         blockSumPipeline = _this$pipelines$i.blockSumPipeline,
         reorderPipeline = _this$pipelines$i.reorderPipeline;
+
+      // Compute local prefix sums and block sums
       pass.setPipeline(blockSumPipeline.pipeline);
       pass.setBindGroup(0, blockSumPipeline.bindGroup);
       pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
+
+      // Compute block sums prefix sum
       this.kernels.prefixSum.dispatch(pass);
+
+      // Reorder keys and values
       pass.setPipeline(reorderPipeline.pipeline);
       pass.setBindGroup(0, reorderPipeline.bindGroup);
       pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
     }
   }
   /**
-   * Dispatch workgroups from indirect GPU buffers
+   * Dispatch workgroups from indirect GPU buffers (used when check_order is enabled)
    */
   function _dispatchPipelinesIndirect(pass) {
+    // Reset the `dispatch` and `is_sorted` buffers
+    this.kernels.checkSort.reset.dispatch(pass);
     for (var i = 0; i < this.bit_count / 2; i++) {
       var _this$pipelines$i2 = this.pipelines[i],
         blockSumPipeline = _this$pipelines$i2.blockSumPipeline,
         reorderPipeline = _this$pipelines$i2.reorderPipeline;
-      if (this.check_order && i % 2 == 0) {
-        this.kernels.checkSortFast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast);
-        this.kernels.checkSortFull.dispatch(pass, this.buffers.checkSortFullDispatchSize);
+      if (i % 2 == 0) {
+        // Check if the data is sorted every 2 passes
+        this.kernels.checkSort.fast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast);
+        this.kernels.checkSort.full.dispatch(pass, this.buffers.checkSortFullDispatchSize);
       }
+
+      // Compute local prefix sums and block sums
       pass.setPipeline(blockSumPipeline.pipeline);
       pass.setBindGroup(0, blockSumPipeline.bindGroup);
       pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);
+
+      // Compute block sums prefix sum
       this.kernels.prefixSum.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.prefix_sum);
+
+      // Reorder keys and values
       pass.setPipeline(reorderPipeline.pipeline);
       pass.setBindGroup(0, reorderPipeline.bindGroup);
       pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);

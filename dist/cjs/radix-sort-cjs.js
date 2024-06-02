@@ -647,7 +647,7 @@ fn radix_sort_reorder(
     outputValues[sorted_position] = v;
 }`;
 
-const checkSortSource = (isFirstPass = false, isLastPass = false, isFullCheck = false) => /* wgsl */ `
+const checkSortSource = (isFirstPass = false, isLastPass = false, kernelMode = 'full') => /* wgsl */ `
 
 @group(0) @binding(0) var<storage, read> input: array<u32>;
 @group(0) @binding(1) var<storage, read_write> output: array<u32>;
@@ -661,6 +661,26 @@ override ELEMENT_COUNT: u32;
 override START_ELEMENT: u32;
 
 var<workgroup> s_data: array<u32, THREADS_PER_WORKGROUP>;
+
+// Reset dispatch buffer and is_sorted flag
+@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
+fn reset(
+    @builtin(workgroup_id) w_id: vec3<u32>,
+    @builtin(num_workgroups) w_dim: vec3<u32>,
+    @builtin(local_invocation_index) TID: u32, // Local thread ID
+) {
+    if (TID >= ELEMENT_COUNT) {
+        return;
+    }
+
+    if (TID == 0) {
+        is_sorted = 0u;
+    }
+
+    let ELM_ID = TID * 3;
+
+    output[ELM_ID] = original[ELM_ID];
+}
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
 fn check_sort(
@@ -685,7 +705,7 @@ fn check_sort(
     workgroupBarrier();
 
     // Write reduction result
-    ${ isLastPass ? last_pass(isFullCheck) : write_reduction_result }
+    ${ isLastPass ? last_pass(kernelMode) : write_reduction_result }
 }`;
 
 const write_reduction_result = /* wgsl */ `
@@ -707,7 +727,7 @@ const first_pass_load_data = /* wgsl */ `
     s_data[TID] = select(0u, 1u, GID < ELEMENT_COUNT-1 && elm > next);
 `;
 
-const last_pass = (isFullCheck) => /* wgsl */ `
+const last_pass = (kernelMode) => /* wgsl */ `
     let fullDispatchLength = arrayLength(&output);
     let dispatchIndex = TID * 3;
 
@@ -715,13 +735,15 @@ const last_pass = (isFullCheck) => /* wgsl */ `
         return;
     }
 
-    ${isFullCheck ? last_pass_full : last_pass_fast}
+    ${kernelMode == 'full' ? last_pass_full : last_pass_fast}
 `;
 
+// If the fast check kernel is sorted and the data isn't already sorted, run the full check
 const last_pass_fast = /* wgsl */ `
     output[dispatchIndex] = select(0, original[dispatchIndex], s_data[0] == 0 && is_sorted == 0u);
 `;
 
+// If the full check kernel is sorted, set the flag to 1 and skip radix sort passes
 const last_pass_full = /* wgsl */ `
     if (TID == 0 && s_data[0] == 0) {
         is_sorted = 1u;
@@ -741,7 +763,7 @@ class CheckSortKernel {
      * @param {GPUBuffer} is_sorted - 1-element buffer to store whether the array is sorted
      * @param {number} count - The number of elements to check
      * @param {number} start - The index to start checking from
-     * @param {boolean} full_check - Whether this kernel is performing a full check or a fast check
+     * @param {boolean} mode - The type of check sort kernel ('reset', 'fast', 'full')
      * @param {object} workgroup_size - The workgroup size in x and y dimensions
      */
     constructor({
@@ -752,13 +774,13 @@ class CheckSortKernel {
         is_sorted,
         count,
         start = 0,
-        full_check = true,
+        mode = 'full',
         workgroup_size = { x: 16, y: 16 },
     }) {
         this.device = device;
         this.count = count;
         this.start = start;
-        this.full_check = full_check;
+        this.mode = mode;
         this.workgroup_size = workgroup_size;
         this.threads_per_workgroup = workgroup_size.x * workgroup_size.y;
 
@@ -800,8 +822,10 @@ class CheckSortKernel {
         const isFirstPass = passIndex === 0;
         const isLastPass = workgroup_count <= 1;
 
+        const label = `check-sort-${this.mode}-${passIndex}`;
+
         const outputBuffer = isLastPass ? this.buffers.result : this.device.createBuffer({
-            label: `check-sort-${this.full_check ? 'full' : 'fast'}-${passIndex}`,
+            label: label,
             size: workgroup_count * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
         });
@@ -864,16 +888,18 @@ class CheckSortKernel {
             layout: pipelineLayout,
             compute: {
                 module: this.device.createShaderModule({
-                    code: checkSortSource(isFirstPass, isLastPass, this.full_check),
-                    label: 'check-sort',
+                    label: label,
+                    code: checkSortSource(isFirstPass, isLastPass, this.mode),
                 }),
-                entryPoint: 'check_sort',
+                entryPoint: this.mode == 'reset' ? 'reset' : 'check_sort',
                 constants: {
+                    'ELEMENT_COUNT': element_count,
                     'WORKGROUP_SIZE_X': this.workgroup_size.x,
                     'WORKGROUP_SIZE_Y': this.workgroup_size.y,
-                    'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
-                    'ELEMENT_COUNT': element_count,
-                    'START_ELEMENT': start_element,
+                    ...(this.mode != 'reset' && { 
+                        'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
+                        'START_ELEMENT': start_element,
+                    })
                 },
             }
         });
@@ -890,7 +916,7 @@ class CheckSortKernel {
         for (let i = 0; i < this.pipelines.length; i++) {
             const { pipeline, bindGroup } = this.pipelines[i];
 
-            const dispatchIndirect = (this.full_check || i < this.pipelines.length - 1);
+            const dispatchIndirect = this.mode != 'reset' && (this.mode == 'full' || i < this.pipelines.length - 1);
 
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);
@@ -898,7 +924,7 @@ class CheckSortKernel {
             if (dispatchIndirect)
                 pass.dispatchWorkgroupsIndirect(dispatchSize, offset + i * 3 * 4);
             else
-                // Only the last dispatch of the fast check kernel is constant to (1, 1, 1)
+                // Only the reset kernel and the last dispatch of the fast check kernel are constant to (1, 1, 1)
                 pass.dispatchWorkgroups(1, 1, 1);
         }
     }
@@ -918,7 +944,7 @@ class RadixSortKernel {
      * @param {number} count - Number of elements to sort
      * @param {number} bit_count - Number of bits per element (default: 32)
      * @param {object} workgroup_size - Workgroup size in x and y dimensions. (x * y) must be a power of two
-     * @param {boolean} check_order - Enable "order checking" optimization. Useful if the data needs to be sorted in real-time and doesn't change much. (default: false)
+     * @param {boolean} check_order - Enable "order checking" optimization. Can improve performance if the data needs to be sorted in real-time and doesn't change much. (default: false)
      * @param {boolean} local_shuffle - Enable "local shuffling" optimization for the radix sort kernel (default: false)
      * @param {boolean} avoid_bank_conflicts - Enable "avoiding bank conflicts" optimization for the prefix sum kernel (default: false)
      */
@@ -1076,6 +1102,7 @@ class RadixSortKernel {
         };
 
         this.dispatchSize = dispatchSize;
+        this.initialDispatch = initialDispatch;
 
         return {
             initialDispatch,
@@ -1167,6 +1194,7 @@ class RadixSortKernel {
 
         // Create the full pass
         const checkSortFull = new CheckSortKernel({
+            mode: 'full',
             device: this.device,
             data: this.buffers.keys,
             result: this.buffers.dispatchSize,
@@ -1174,30 +1202,46 @@ class RadixSortKernel {
             is_sorted: this.buffers.isSorted,
             count: check_sort_full_count,
             start: start_full,
-            full_check: true,
             workgroup_size: this.workgroup_size
         });
 
         // Create the fast pass
         const checkSortFast = new CheckSortKernel({
+            mode: 'fast',
             device: this.device,
             data: this.buffers.keys,
             result: this.buffers.checkSortFullDispatchSize,
             original: this.buffers.originalCheckSortFullDispatchSize,
             is_sorted: this.buffers.isSorted,
             count: check_sort_fast_count,
-            full_check: false,
             workgroup_size: this.workgroup_size
         });
 
-        if (checkSortFast.threads_per_workgroup < checkSortFull.pipelines.length) {
+        const initialDispatchElementCount = this.initialDispatch.length / 3;
+
+        if (checkSortFast.threads_per_workgroup < checkSortFull.pipelines.length || checkSortFull.threads_per_workgroup < initialDispatchElementCount) {
             console.warn(`Warning: workgroup size is too small to enable check sort optimization, disabling...`);
             this.check_order = false;
             return
         }
 
-        this.kernels.checkSortFast = checkSortFast;
-        this.kernels.checkSortFull = checkSortFull;
+        // Create the reset pass
+        const checkSortReset = new CheckSortKernel({
+            mode: 'reset',
+            device: this.device,
+            data: this.buffers.keys,
+            original: this.buffers.originalDispatchSize,
+            result: this.buffers.dispatchSize,
+            is_sorted: this.buffers.isSorted,
+            count: initialDispatchElementCount,
+            workgroup_size: find_optimal_dispatch_size(this.device, initialDispatchElementCount)
+        });
+
+        this.kernels.checkSort = {
+            reset: checkSortReset,
+            fast: checkSortFast,
+            full: checkSortFull,
+        };
     }
 
     create_block_sum_pipeline(inKeys, inValues, bit) {
@@ -1396,12 +1440,15 @@ class RadixSortKernel {
         for (let i = 0; i < this.bit_count / 2; i++) {
             const { blockSumPipeline, reorderPipeline } = this.pipelines[i];
             
+            // Compute local prefix sums and block sums
             pass.setPipeline(blockSumPipeline.pipeline);
             pass.setBindGroup(0, blockSumPipeline.bindGroup);
             pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
 
+            // Compute block sums prefix sum
             this.kernels.prefixSum.dispatch(pass);
 
+            // Reorder keys and values
             pass.setPipeline(reorderPipeline.pipeline);
             pass.setBindGroup(0, reorderPipeline.bindGroup);
             pass.dispatchWorkgroups(this.dispatchSize.x, this.dispatchSize.y, 1);
@@ -1409,23 +1456,30 @@ class RadixSortKernel {
     }
 
     /**
-     * Dispatch workgroups from indirect GPU buffers
+     * Dispatch workgroups from indirect GPU buffers (used when check_order is enabled)
      */
     #dispatchPipelinesIndirect(pass) {
+        // Reset the `dispatch` and `is_sorted` buffers
+        this.kernels.checkSort.reset.dispatch(pass);
+        
         for (let i = 0; i < this.bit_count / 2; i++) {
             const { blockSumPipeline, reorderPipeline } = this.pipelines[i];
 
-            if (this.check_order && i % 2 == 0) {
-                this.kernels.checkSortFast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast);
-                this.kernels.checkSortFull.dispatch(pass, this.buffers.checkSortFullDispatchSize);
+            if (i % 2 == 0) {
+                // Check if the data is sorted every 2 passes
+                this.kernels.checkSort.fast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast);
+                this.kernels.checkSort.full.dispatch(pass, this.buffers.checkSortFullDispatchSize);
             }
             
+            // Compute local prefix sums and block sums
             pass.setPipeline(blockSumPipeline.pipeline);
             pass.setBindGroup(0, blockSumPipeline.bindGroup);
             pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);
 
+            // Compute block sums prefix sum
             this.kernels.prefixSum.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.prefix_sum);
 
+            // Reorder keys and values
             pass.setPipeline(reorderPipeline.pipeline);
             pass.setBindGroup(0, reorderPipeline.bindGroup);
             pass.dispatchWorkgroupsIndirect(this.buffers.dispatchSize, this.dispatchOffsets.radix_sort);
