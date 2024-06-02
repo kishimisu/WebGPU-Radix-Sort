@@ -5,20 +5,116 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebGPU 4-way Radix Sort</title>
 
-    <!-- Local file -->
+    <!-- Demo Page -->
     <script type="module" src="example/index.js"></script>
-    
-    <!-- CommonJS -->
-    <!-- <script src="./dist/umd/radix-sort-umd.js"></script>
-    <script>
-        const { RadixSortKernel } = RadixSort;
-    </script> -->
 
-    <!-- ESM -->
-    <!-- <script type="module">
-        import { RadixSortKernel } from './dist/esm/radix-sort-esm.js';
-    </script> -->
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            font-family: monospace;
+
+            color: #fff;
+        }
+
+        body {
+            background: #222;
+            height: 100vh;
+            max-width: 100%;
+        }
+
+        #gui {
+            position: fixed;
+            top: 10px;
+            right: 20px;
+            width: 500px;
+            background: #333;
+        }
+
+        #results {
+            width: 50%;
+            height: 100%;
+            background: #333;
+            overflow-y: auto;
+        }
+
+        .result {
+            padding: 5px;
+        }
+
+        #info {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+
+        .gui-ctn {
+            display: flex;
+            border: 1px solid #999;
+            background: #444;
+        }
+
+        .gui-title {
+            padding: 5px 20px;
+            text-transform: uppercase;
+            font-weight: bold;
+            font-family: 'Courier New', Courier, monospace;
+            border-left: 5px solid #222;
+            background: #333;
+        }
+
+        .gui-label {
+            width: 160px;
+            padding: 5px 0;
+            padding-left: 10px;
+            align-content: center;
+            font-size: 14px;
+        }
+
+        .gui-input {
+            display: flex;
+            justify-content: center;
+            flex-grow: 1;
+        }
+
+        .gui-slider {
+            flex-grow: 1;
+        }
+
+        .gui-checkbox {
+            flex-grow: 1;
+            height: 20px;
+            align-self: center;
+        }
+
+        .gui-button {
+            width: 100%;
+            padding: 15px 0;
+            background: #2c2c2c;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        select {
+            flex-grow: 1;
+            background: #2c2c2c;
+            padding: 5px 0;
+            margin: 5px 0;
+        }
+
+        .gui-value {
+            margin-left: 10px;
+            width: 85px;
+            align-content: center;
+        }
+    </style>
 </head>
 <body>
+    <div id="gui"></div>
+    <div id="results">
+        <div id="info">Click "Run Radix Sort" to compare performances</div>
+    </div>
 </body>
 </html>

@@ -39,6 +39,10 @@ async function test_radix_sort(device, keys_and_values = false) {
         // const keys = new Float32Array(element_count).map(_ => Math.random() * 10)
         const values = new Uint32Array(element_count).map((_, i) => i)
 
+        const check_order = Math.random() > .5
+        const local_shuffle = Math.random() > .5
+        const avoid_bank_conflicts = Math.random() > .5
+
         // Create GPU buffers
         const [keysBuffer, keysBufferMapped] = create_buffers(device, keys)
         const [valuesBuffer, valuesBufferMapped] = create_buffers(device, values)
@@ -49,8 +53,11 @@ async function test_radix_sort(device, keys_and_values = false) {
             keys: keysBuffer,
             values: keys_and_values ? valuesBuffer : null,
             count: sub_element_count,
-            workgroup_size: workgroup_size,
             bit_count: bit_count,
+            workgroup_size: workgroup_size,
+            check_order: check_order,
+            local_shuffle: local_shuffle,
+            avoid_bank_conflicts: avoid_bank_conflicts,
         })
 
         // Create command buffer and compute pass
@@ -62,16 +69,9 @@ async function test_radix_sort(device, keys_and_values = false) {
         pass.end()
 
         // Copy result back to CPU
-        if (bit_count % 4 === 0) {
-            encoder.copyBufferToBuffer(kernel.buffers.keys, 0, keysBufferMapped, 0, element_count * 4)
-            if (keys_and_values)
-                encoder.copyBufferToBuffer(kernel.buffers.values, 0, valuesBufferMapped, 0, element_count * 4)
-        }
-        else {
-            encoder.copyBufferToBuffer(kernel.buffers.tmpKeys, 0, keysBufferMapped, 0, element_count * 4)
-            if (keys_and_values)
-                encoder.copyBufferToBuffer(kernel.buffers.tmpValues, 0, valuesBufferMapped, 0, element_count * 4)
-        }
+        encoder.copyBufferToBuffer(kernel.buffers.keys, 0, keysBufferMapped, 0, element_count * 4)
+        if (keys_and_values)
+            encoder.copyBufferToBuffer(kernel.buffers.values, 0, valuesBufferMapped, 0, element_count * 4)
 
         // Submit command buffer
         device.queue.submit([encoder.finish()])
@@ -93,7 +93,7 @@ async function test_radix_sort(device, keys_and_values = false) {
             isOK = isOK && valuesResult.every((v, i) => keysResult[i] == keys[v])
         }
 
-        console.log('workgroup_size', element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
+        console.log('Test Radix Sort:', element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
 
         if (!isOK) {
             console.log('keys', keys)
@@ -178,100 +178,13 @@ async function test_prefix_sum(device) {
     }
 }
 
-// Test the performance of the radix sort kernel on GPU
-// and optionally compare it to the CPU sort
-async function test_radix_sort_performance(
-    device,
-    element_count = 1_000_000, 
-    bit_count = 32, 
-    workgroup_size_x = 16, 
-    workgroup_size_y = 16,
-    keys_and_values = false,
-    test_cpu = true,
-    local_shuffle = false,
-    avoid_bank_conflicts = false
-) {
-    const max_range = 2 ** bit_count
-    const keys   = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * max_range))
-    const values = new Uint32Array(element_count).map(_ => Math.floor(Math.random() * 1_000_000))
-
-    // Create keys and values buffers on GPU
-    const [keysBuffer] = create_buffers(device, keys)
-    const [valuesBuffer] = create_buffers(device, values)
-
-    // Create timestamp query
-    const timestampCount = 2
-    const querySet = device.createQuerySet({
-        type: "timestamp",
-        count: timestampCount,
-    })
-    const queryBuffer = device.createBuffer({
-        size: 8 * timestampCount,
-        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
-    })
-    const queryBufferMapped = device.createBuffer({
-        size: 8 * timestampCount,
-        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
-    })
-
-    // Create radix sort kernel
-    const radixSortKernel = new RadixSortKernel({
-        device,
-        keys: keysBuffer,
-        values: keys_and_values ? valuesBuffer : null,
-        count: keys.length,
-        workgroup_size: { x: workgroup_size_x, y: workgroup_size_y },
-        bit_count: bit_count,
-        local_shuffle: local_shuffle,
-        avoid_bank_conflicts: avoid_bank_conflicts,
-    })
-
-    // Run and time compute pass
-    const encoder = device.createCommandEncoder()
-    const pass = encoder.beginComputePass({
-        timestampWrites: {
-            querySet,
-            beginningOfPassWriteIndex: 0,
-            endOfPassWriteIndex: 1,
-        }
-    })
-
-    radixSortKernel.dispatch(pass)
-
-    pass.end()
-
-    encoder.resolveQuerySet(querySet, 0, timestampCount, queryBuffer, 0)
-    encoder.copyBufferToBuffer(queryBuffer, 0, queryBufferMapped, 0, 8 * timestampCount)
-
-    device.queue.submit([encoder.finish()])
-
-    await queryBufferMapped.mapAsync(GPUMapMode.READ)
-    const timestamps = new BigUint64Array(queryBufferMapped.getMappedRange().slice())
-    queryBufferMapped.unmap()
-
-    const gpuMs = Number(timestamps[1] - timestamps[0]) / 1e6
-    let cpuMs = null
-
-    if (test_cpu) {
-        // CPU Sort
-        const start = performance.now()
-        keys.sort((a, b) => a - b)
-        cpuMs = performance.now() - start
-    }
-
-    return { 
-        cpu: cpuMs,
-        gpu: gpuMs
-    }
-}
-
 // Create a GPUBuffer with data from an Uint32Array
 // Also create a second buffer to read back from GPU
-function create_buffers(device, data) {
+function create_buffers(device, data, usage = 0) {
     // Transfer data to GPU
     const dataBuffer = device.createBuffer({
         size: data.length * 4,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | usage,
         mappedAtCreation: true
     })
     new data.constructor(dataBuffer.getMappedRange()).set(data)
@@ -284,6 +197,47 @@ function create_buffers(device, data) {
     })
 
     return [dataBuffer, dataBufferMapped]
+}
+
+// Create a timestamp query object for measuring GPU time
+function create_timestamp_query(device) {
+    const timestampCount = 2
+    const querySet = device.createQuerySet({
+        type: "timestamp",
+        count: timestampCount,
+    })
+    const queryBuffer = device.createBuffer({
+        size: 8 * timestampCount,
+        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
+    })
+    const queryResultBuffer = device.createBuffer({
+        size: 8 * timestampCount,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+    })
+
+    const resolve = (encoder) => {    
+        encoder.resolveQuerySet(querySet, 0, timestampCount, queryBuffer, 0)
+        encoder.copyBufferToBuffer(queryBuffer, 0, queryResultBuffer, 0, 8 * timestampCount)
+    }
+
+    const get_timestamps = async () => {
+        await queryResultBuffer.mapAsync(GPUMapMode.READ)
+        const timestamps = new BigUint64Array(queryResultBuffer.getMappedRange().slice())
+        queryResultBuffer.unmap()
+        return timestamps
+    }
+
+    return {
+        descriptor: {
+            timestampWrites: {
+                querySet: querySet,
+                beginningOfPassWriteIndex: 0,
+                endOfPassWriteIndex: 1,
+            },
+        },
+        resolve,
+        get_timestamps
+    }
 }
 
 // CPU version of the prefix sum algorithm
@@ -300,6 +254,6 @@ function prefix_sum_cpu(data) {
 export {
     test_radix_sort,
     test_prefix_sum,
-    test_radix_sort_performance,
-    create_buffers
+    create_buffers,
+    create_timestamp_query,
 }
