@@ -1,5 +1,7 @@
 # Fast 4-way parallel radix sort for WebGPU
 
+[![npm version](https://badge.fury.io/js/webgpu-radix-sort.svg)](https://badge.fury.io/js/webgpu-radix-sort)
+
 This is a WebGPU implementation for the radix sort algorithm as described in the paper [Fast 4-way parallel radix sorting on GPUs](https://www.sci.utah.edu/~csilva/papers/cgf.pdf).
 
 - Sort large arrays on GPU using WGSL compute shaders
@@ -24,19 +26,14 @@ Thus, this repository also contains a WebGPU implementation of the method descri
 - Recurses on itself until the input fits one workgroup
 - Supports arrays of arbitrary size
 
+## Demo
+
+https://kishimisu.github.io/WebGPU-Radix-Sort/
+
 ## Installation
 ### Using npm
 ```bash
 npm install webgpu-radix-sort
-```
-
-Then import it in your app:
-```javascript
-// ESM
-import { RadixSortKernel } from 'webgpu-radix-sort';
-
-// CommonJS
-const { RadixSortKernel } = require('webgpu-radix-sort');
 ```
 
 ### Using a \<script\> tag
@@ -61,6 +58,8 @@ const { RadixSortKernel } = require('webgpu-radix-sort');
 ```
 ## Usage
 ```javascript
+import { RadixSortKernel } from 'webgpu-radix-sort';
+
 // Create GPU device
 const adapter = await navigator.gpu?.requestAdapter()
 const device = await adapter?.requestDevice()
@@ -71,13 +70,13 @@ const valuesBuffer = device.createBuffer({ ... }) // values can be any type
 
 // Create radix sort kernel    
 const radixSortKernel = new RadixSortKernel({
-        device: device,                   // GPUDevice to use
-        keys: keysBuffer,                 // GPUBuffer containing the keys to sort
-        values: valuesBuffer,             // (optional) GPUBuffer containing the associated values
-        count: keys.length,               // Number of elements to sort
-        check_order: false,               // Exit early if the input is sorted (can improve real-time applications)
-        bit_count: 32,                    // Number of bits per element. Must be a multiple of 4 (default: 32)
-        workgroup_size: { x: 16, y: 16 }, // Workgroup size in x and y dimensions. (x * y) must be a power of two
+    device: device,                   // GPUDevice to use
+    keys: keysBuffer,                 // GPUBuffer containing the keys to sort
+    values: valuesBuffer,             // (optional) GPUBuffer containing the associated values
+    count: keys.length,               // Number of elements to sort
+    check_order: true,                // Exit early if the input is sorted (can improve real-time applications)
+    bit_count: 32,                    // Number of bits per element. Must be a multiple of 4 (default: 32)
+    workgroup_size: { x: 16, y: 16 }, // Workgroup size in x and y dimensions. (x * y) must be a power of two
 })
 
 // Create CommandEncoder and ComputePass
@@ -114,8 +113,6 @@ You should also take the following limits into consideration when choosing the `
 
 ## Performance Tests
 
-I've made a minimal web demo on which you can run the algorithm locally: https://kishimisu.github.io/WebGPU-Radix-Sort/
-
 The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU) and a NVIDIA RTX 3080TI (GPU). The vertical axis is logarithmic.
 
 ![results](./example/results.jpg)
@@ -123,6 +120,13 @@ The following tests were done on a laptop using an Intel Core i9 @ 2.90GHz (CPU)
 ## Implementation detalis
 
 ### 1) Fast 4-way parallel radix sort
+
+#### Local shuffling and coalesced mapping
+
+In the original paper, a section describes how the data is locally shuffled (sorted) within the workgroups before computing the prefix block sum. This is done in order to address the issue of non-coalseced writing on the global memory.
+By sorting the input data locally, it improves the memory read/write patterns during the final reordering step, resulting in a 36% performance increase in the original paper.
+However, adding this process to my WebGPU implementation didn't seem to have such an impact on the performance. This can be explained by the fact that this paper was designed for an old version of CUDA (2009) and graphics card architectures have evolved since, being more optimized "out of the box" today.
+For this reason, this process is disabled by default, but it can be enabled with the parameter `local_shuffle`.
 
 #### Order checking
 
@@ -154,13 +158,6 @@ When this optimization is enabled, these two kernels are dispatched every 2 pass
 
 3. RadixSortKernel
     - The radix sort kernel will now run conditionally based on the result of the check sort kernels
-
-#### Local shuffling and coalesced mapping
-
-In the original paper, a section describes how the data is locally shuffled (sorted) within the workgroups before computing the prefix block sum. This is done in order to address the issue of non-coalseced writing on the global memory.
-By sorting the input data locally, it improves the memory read/write patterns during the final reordering step, resulting in a 36% performance increase in the original paper.
-However, adding this process to my WebGPU implementation didn't seem to have such an impact on the performance. This can be explained by the fact that this paper was designed for an old version of CUDA (2009) and graphics card architectures have evolved since, being more optimized "out of the box" today.
-For this reason, this process is disabled by default, but it can be enabled with the parameter `local_shuffle`.
 
 ### 2) Parallel Prefix Sum with CUDA
 
