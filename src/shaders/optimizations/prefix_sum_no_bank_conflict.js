@@ -12,6 +12,7 @@ override WORKGROUP_SIZE_X: u32;
 override WORKGROUP_SIZE_Y: u32;
 override THREADS_PER_WORKGROUP: u32;
 override ITEMS_PER_WORKGROUP: u32;
+override ELEMENT_COUNT: u32;
 
 const NUM_BANKS: u32 = 32;
 const LOG_NUM_BANKS: u32 = 5;
@@ -43,8 +44,8 @@ fn reduce_downsweep(
     let s_bi = bi + get_offset(bi);
     let g_ai = ai + WID * 2;
     let g_bi = bi + WID * 2;
-    temp[s_ai] = items[g_ai];
-    temp[s_bi] = items[g_bi];
+    temp[s_ai] = select(items[g_ai], 0, g_ai >= ELEMENT_COUNT);
+    temp[s_bi] = select(items[g_bi], 0, g_bi >= ELEMENT_COUNT);
 
     var offset: u32 = 1;
 
@@ -91,8 +92,12 @@ fn reduce_downsweep(
     workgroupBarrier();
 
     // Copy result from shared memory to global memory
-    items[g_ai] = temp[s_ai];
-    items[g_bi] = temp[s_bi];
+    if (g_ai < ELEMENT_COUNT) {
+        items[g_ai] = temp[s_ai];
+    }
+    if (g_bi < ELEMENT_COUNT) {
+        items[g_bi] = temp[s_bi];
+    }
 }
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
@@ -106,9 +111,19 @@ fn add_block_sums(
     let GID = WID + TID; // Global thread ID
 
     let ELM_ID = GID * 2;
+
+    if (ELM_ID >= ELEMENT_COUNT) {
+        return;
+    }
+
     let blockSum = blockSums[WORKGROUP_ID];
 
     items[ELM_ID] += blockSum;
+
+    if (ELM_ID + 1 >= ELEMENT_COUNT) {
+        return;
+    }
+
     items[ELM_ID + 1] += blockSum;
 }`
 
