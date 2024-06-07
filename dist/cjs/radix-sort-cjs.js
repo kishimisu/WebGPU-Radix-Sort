@@ -11,6 +11,7 @@ override WORKGROUP_SIZE_X: u32;
 override WORKGROUP_SIZE_Y: u32;
 override THREADS_PER_WORKGROUP: u32;
 override ITEMS_PER_WORKGROUP: u32;
+override ELEMENT_COUNT: u32;
 
 var<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;
 
@@ -28,8 +29,8 @@ fn reduce_downsweep(
     let ELM_GID = GID * 2; // Element pair global ID
     
     // Load input to shared memory
-    temp[ELM_TID]     = items[ELM_GID];
-    temp[ELM_TID + 1] = items[ELM_GID + 1];
+    temp[ELM_TID]     = select(items[ELM_GID], 0, ELM_GID >= ELEMENT_COUNT);
+    temp[ELM_TID + 1] = select(items[ELM_GID + 1], 0, ELM_GID + 1 >= ELEMENT_COUNT);
 
     var offset: u32 = 1;
 
@@ -71,7 +72,14 @@ fn reduce_downsweep(
     workgroupBarrier();
 
     // Copy result from shared memory to global memory
-    items[ELM_GID]     = temp[ELM_TID];
+    if (ELM_GID >= ELEMENT_COUNT) {
+        return;
+    }
+    items[ELM_GID] = temp[ELM_TID];
+
+    if (ELM_GID + 1 >= ELEMENT_COUNT) {
+        return;
+    }
     items[ELM_GID + 1] = temp[ELM_TID + 1];
 }
 
@@ -84,12 +92,21 @@ fn add_block_sums(
     let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
     let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
     let GID = WID + TID; // Global thread ID
-    
 
     let ELM_ID = GID * 2;
+
+    if (ELM_ID >= ELEMENT_COUNT) {
+        return;
+    }
+
     let blockSum = blockSums[WORKGROUP_ID];
 
     items[ELM_ID] += blockSum;
+
+    if (ELM_ID + 1 >= ELEMENT_COUNT) {
+        return;
+    }
+
     items[ELM_ID + 1] += blockSum;
 }`;
 
@@ -107,6 +124,7 @@ override WORKGROUP_SIZE_X: u32;
 override WORKGROUP_SIZE_Y: u32;
 override THREADS_PER_WORKGROUP: u32;
 override ITEMS_PER_WORKGROUP: u32;
+override ELEMENT_COUNT: u32;
 
 const NUM_BANKS: u32 = 32;
 const LOG_NUM_BANKS: u32 = 5;
@@ -138,8 +156,8 @@ fn reduce_downsweep(
     let s_bi = bi + get_offset(bi);
     let g_ai = ai + WID * 2;
     let g_bi = bi + WID * 2;
-    temp[s_ai] = items[g_ai];
-    temp[s_bi] = items[g_bi];
+    temp[s_ai] = select(items[g_ai], 0, g_ai >= ELEMENT_COUNT);
+    temp[s_bi] = select(items[g_bi], 0, g_bi >= ELEMENT_COUNT);
 
     var offset: u32 = 1;
 
@@ -186,8 +204,12 @@ fn reduce_downsweep(
     workgroupBarrier();
 
     // Copy result from shared memory to global memory
-    items[g_ai] = temp[s_ai];
-    items[g_bi] = temp[s_bi];
+    if (g_ai < ELEMENT_COUNT) {
+        items[g_ai] = temp[s_ai];
+    }
+    if (g_bi < ELEMENT_COUNT) {
+        items[g_bi] = temp[s_bi];
+    }
 }
 
 @compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1)
@@ -201,9 +223,19 @@ fn add_block_sums(
     let GID = WID + TID; // Global thread ID
 
     let ELM_ID = GID * 2;
+
+    if (ELM_ID >= ELEMENT_COUNT) {
+        return;
+    }
+
     let blockSum = blockSums[WORKGROUP_ID];
 
     items[ELM_ID] += blockSum;
+
+    if (ELM_ID + 1 >= ELEMENT_COUNT) {
+        return;
+    }
+
     items[ELM_ID + 1] += blockSum;
 }`;
 
@@ -342,7 +374,8 @@ class PrefixSumKernel {
                     'WORKGROUP_SIZE_X': this.workgroup_size.x,
                     'WORKGROUP_SIZE_Y': this.workgroup_size.y,
                     'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
-                    'ITEMS_PER_WORKGROUP': this.items_per_workgroup
+                    'ITEMS_PER_WORKGROUP': this.items_per_workgroup,
+                    'ELEMENT_COUNT': count,
                 }
             }
         });
@@ -363,7 +396,8 @@ class PrefixSumKernel {
                     constants: {
                         'WORKGROUP_SIZE_X': this.workgroup_size.x,
                         'WORKGROUP_SIZE_Y': this.workgroup_size.y,
-                        'THREADS_PER_WORKGROUP': this.threads_per_workgroup
+                        'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
+                        'ELEMENT_COUNT': count,
                     }
                 }
             });
@@ -425,7 +459,7 @@ fn radix_sort(
     let GID = WID + TID; // Global thread ID
 
     // Extract 2 bits from the input
-    let elm = input[GID];
+    let elm = select(input[GID], 0, GID >= ELEMENT_COUNT);
     let extract_bits: u32 = (elm >> CURRENT_BIT) & 0x3;
 
     var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);
@@ -451,14 +485,18 @@ fn radix_sort(
         s_prefix_sum[inOffset + 1] = bitmask;
         workgroupBarrier();
 
+        var prefix_sum: u32 = 0;
+
         // Prefix sum
         for (var offset: u32 = 1; offset < THREADS_PER_WORKGROUP; offset *= 2) {
             if (TID >= offset) {
-                s_prefix_sum[outOffset] = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];
+                prefix_sum = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];
             } else {
-                s_prefix_sum[outOffset] = s_prefix_sum[inOffset];
+                prefix_sum = s_prefix_sum[inOffset];
             }
 
+            s_prefix_sum[outOffset] = prefix_sum;
+            
             // Swap buffers
             outOffset = inOffset;
             swapOffset = TPW - swapOffset;
@@ -468,7 +506,6 @@ fn radix_sort(
         }
 
         // Store prefix sum for current bit
-        let prefix_sum = s_prefix_sum[inOffset];
         bit_prefix_sums[b] = prefix_sum;
 
         if (TID == LAST_THREAD) {
@@ -483,8 +520,10 @@ fn radix_sort(
         inOffset = TID + swapOffset;
     }
 
-    // Store local prefix sum to global memory
-    local_prefix_sums[GID] = bit_prefix_sums[extract_bits];
+    if (GID < ELEMENT_COUNT) {
+        // Store local prefix sum to global memory
+        local_prefix_sums[GID] = bit_prefix_sums[extract_bits];
+    }
 }`;
 
 /**
@@ -520,8 +559,12 @@ fn radix_sort(
     let GID = WID + TID; // Global thread ID
 
     // Extract 2 bits from the input
-    let elm = input[GID];
-    let val = values[GID];
+    var elm: u32 = 0;
+    var val: u32 = 0;
+    if (GID < ELEMENT_COUNT) {
+        elm = input[GID];
+        val = values[GID];
+    }
     let extract_bits: u32 = (elm >> CURRENT_BIT) & 0x3;
 
     var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);
@@ -547,13 +590,17 @@ fn radix_sort(
         s_prefix_sum[inOffset + 1] = bitmask;
         workgroupBarrier();
 
+        var prefix_sum: u32 = 0;
+
         // Prefix sum
         for (var offset: u32 = 1; offset < THREADS_PER_WORKGROUP; offset *= 2) {
             if (TID >= offset) {
-                s_prefix_sum[outOffset] = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];
+                prefix_sum = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];
             } else {
-                s_prefix_sum[outOffset] = s_prefix_sum[inOffset];
+                prefix_sum = s_prefix_sum[inOffset];
             }
+
+            s_prefix_sum[outOffset] = prefix_sum;
 
             // Swap buffers
             outOffset = inOffset;
@@ -564,7 +611,6 @@ fn radix_sort(
         }
 
         // Store prefix sum for current bit
-        let prefix_sum = s_prefix_sum[inOffset];
         bit_prefix_sums[b] = prefix_sum;
 
         if (TID == LAST_THREAD) {

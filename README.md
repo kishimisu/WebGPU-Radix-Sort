@@ -41,7 +41,7 @@ npm install webgpu-radix-sort
 <!-- From source -->
 <script src="./dist/umd/radix-sort-umd.js"></script>
 <!-- From CDN -->
-<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.6/dist/umd/radix-sort-umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.7/dist/umd/radix-sort-umd.js"></script>
 <script>
     const { RadixSortKernel } = RadixSort;
 </script>
@@ -53,7 +53,7 @@ npm install webgpu-radix-sort
     // From source
     import { RadixSortKernel } from './dist/esm/radix-sort-esm.js';
     // From CDN
-    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.6/dist/esm/radix-sort-esm.js';
+    import { RadixSortKernel } from 'https://cdn.jsdelivr.net/npm/webgpu-radix-sort@1.0.7/dist/esm/radix-sort-esm.js';
 </script>
 ```
 ## Usage
