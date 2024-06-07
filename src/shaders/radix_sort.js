@@ -24,7 +24,7 @@ fn radix_sort(
     let GID = WID + TID; // Global thread ID
 
     // Extract 2 bits from the input
-    let elm = input[GID];
+    let elm = select(input[GID], 0, GID >= ELEMENT_COUNT);
     let extract_bits: u32 = (elm >> CURRENT_BIT) & 0x3;
 
     var bit_prefix_sums = array<u32, 4>(0, 0, 0, 0);
@@ -50,14 +50,18 @@ fn radix_sort(
         s_prefix_sum[inOffset + 1] = bitmask;
         workgroupBarrier();
 
+        var prefix_sum: u32 = 0;
+
         // Prefix sum
         for (var offset: u32 = 1; offset < THREADS_PER_WORKGROUP; offset *= 2) {
             if (TID >= offset) {
-                s_prefix_sum[outOffset] = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];
+                prefix_sum = s_prefix_sum[inOffset] + s_prefix_sum[inOffset - offset];
             } else {
-                s_prefix_sum[outOffset] = s_prefix_sum[inOffset];
+                prefix_sum = s_prefix_sum[inOffset];
             }
 
+            s_prefix_sum[outOffset] = prefix_sum;
+            
             // Swap buffers
             outOffset = inOffset;
             swapOffset = TPW - swapOffset;
@@ -67,7 +71,6 @@ fn radix_sort(
         }
 
         // Store prefix sum for current bit
-        let prefix_sum = s_prefix_sum[inOffset];
         bit_prefix_sums[b] = prefix_sum;
 
         if (TID == LAST_THREAD) {
@@ -82,8 +85,10 @@ fn radix_sort(
         inOffset = TID + swapOffset;
     }
 
-    // Store local prefix sum to global memory
-    local_prefix_sums[GID] = bit_prefix_sums[extract_bits];
+    if (GID < ELEMENT_COUNT) {
+        // Store local prefix sum to global memory
+        local_prefix_sums[GID] = bit_prefix_sums[extract_bits];
+    }
 }`
 
 export default radixSortSource;

@@ -98,7 +98,8 @@ class PrefixSumKernel {
                     'WORKGROUP_SIZE_X': this.workgroup_size.x,
                     'WORKGROUP_SIZE_Y': this.workgroup_size.y,
                     'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
-                    'ITEMS_PER_WORKGROUP': this.items_per_workgroup
+                    'ITEMS_PER_WORKGROUP': this.items_per_workgroup,
+                    'ELEMENT_COUNT': count,
                 }
             }
         })
@@ -119,7 +120,8 @@ class PrefixSumKernel {
                     constants: {
                         'WORKGROUP_SIZE_X': this.workgroup_size.x,
                         'WORKGROUP_SIZE_Y': this.workgroup_size.y,
-                        'THREADS_PER_WORKGROUP': this.threads_per_workgroup
+                        'THREADS_PER_WORKGROUP': this.threads_per_workgroup,
+                        'ELEMENT_COUNT': count,
                     }
                 }
             })

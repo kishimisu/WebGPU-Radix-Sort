@@ -7,6 +7,7 @@ override WORKGROUP_SIZE_X: u32;
 override WORKGROUP_SIZE_Y: u32;
 override THREADS_PER_WORKGROUP: u32;
 override ITEMS_PER_WORKGROUP: u32;
+override ELEMENT_COUNT: u32;
 
 var<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;
 
@@ -24,8 +25,8 @@ fn reduce_downsweep(
     let ELM_GID = GID * 2; // Element pair global ID
     
     // Load input to shared memory
-    temp[ELM_TID]     = items[ELM_GID];
-    temp[ELM_TID + 1] = items[ELM_GID + 1];
+    temp[ELM_TID]     = select(items[ELM_GID], 0, ELM_GID >= ELEMENT_COUNT);
+    temp[ELM_TID + 1] = select(items[ELM_GID + 1], 0, ELM_GID + 1 >= ELEMENT_COUNT);
 
     var offset: u32 = 1;
 
@@ -67,7 +68,14 @@ fn reduce_downsweep(
     workgroupBarrier();
 
     // Copy result from shared memory to global memory
-    items[ELM_GID]     = temp[ELM_TID];
+    if (ELM_GID >= ELEMENT_COUNT) {
+        return;
+    }
+    items[ELM_GID] = temp[ELM_TID];
+
+    if (ELM_GID + 1 >= ELEMENT_COUNT) {
+        return;
+    }
     items[ELM_GID + 1] = temp[ELM_TID + 1];
 }
 
@@ -80,12 +88,21 @@ fn add_block_sums(
     let WORKGROUP_ID = w_id.x + w_id.y * w_dim.x;
     let WID = WORKGROUP_ID * THREADS_PER_WORKGROUP;
     let GID = WID + TID; // Global thread ID
-    
 
     let ELM_ID = GID * 2;
+
+    if (ELM_ID >= ELEMENT_COUNT) {
+        return;
+    }
+
     let blockSum = blockSums[WORKGROUP_ID];
 
     items[ELM_ID] += blockSum;
+
+    if (ELM_ID + 1 >= ELEMENT_COUNT) {
+        return;
+    }
+
     items[ELM_ID + 1] += blockSum;
 }`
 

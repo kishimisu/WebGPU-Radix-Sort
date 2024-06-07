@@ -93,7 +93,7 @@ async function test_radix_sort(device, keys_and_values = false) {
             isOK = isOK && valuesResult.every((v, i) => keysResult[i] == keys[v])
         }
 
-        console.log('Test Radix Sort:', element_count, sub_element_count, workgroup_size, isOK ? 'OK' : 'ERROR')
+        console.log('Test Radix Sort:', element_count, sub_element_count, workgroup_size, check_order, local_shuffle, avoid_bank_conflicts, isOK ? 'OK' : 'ERROR')
 
         if (!isOK) {
             console.log('keys', keys)
