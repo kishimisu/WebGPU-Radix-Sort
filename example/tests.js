@@ -42,6 +42,7 @@ async function test_radix_sort(device, keys_and_values = false) {
         const check_order = Math.random() > .5
         const local_shuffle = Math.random() > .5
         const avoid_bank_conflicts = Math.random() > .5
+        const use_indirect_dispatch = Math.random() > .5
 
         // Create GPU buffers
         const [keysBuffer, keysBufferMapped] = create_buffers(device, keys)
@@ -55,6 +56,7 @@ async function test_radix_sort(device, keys_and_values = false) {
             count: sub_element_count,
             bit_count: bit_count,
             workgroup_size: workgroup_size,
+            use_indirect_dispatch: use_indirect_dispatch,
             check_order: check_order,
             local_shuffle: local_shuffle,
             avoid_bank_conflicts: avoid_bank_conflicts,
@@ -93,7 +95,7 @@ async function test_radix_sort(device, keys_and_values = false) {
             isOK = isOK && valuesResult.every((v, i) => keysResult[i] == keys[v])
         }
 
-        console.log('Test Radix Sort:', element_count, sub_element_count, workgroup_size, check_order, local_shuffle, avoid_bank_conflicts, isOK ? 'OK' : 'ERROR')
+        console.log('Test Radix Sort:', element_count, sub_element_count, workgroup_size, use_indirect_dispatch, check_order, local_shuffle, avoid_bank_conflicts, isOK ? 'OK' : 'ERROR')
 
         if (!isOK) {
             console.log('keys', keys)

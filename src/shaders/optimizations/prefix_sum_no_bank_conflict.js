@@ -18,8 +18,8 @@ const NUM_BANKS: u32 = 32;
 const LOG_NUM_BANKS: u32 = 5;
 
 fn get_offset(offset: u32) -> u32 {
-    // return offset >> LOG_NUM_BANKS; // Conflict-free
-    return (offset >> NUM_BANKS) + (offset >> (2 * LOG_NUM_BANKS)); // Zero bank conflict
+    return offset >> LOG_NUM_BANKS; // Conflict-free
+    // return (offset >> NUM_BANKS) + (offset >> (2 * LOG_NUM_BANKS)); // Zero bank conflict
 }
 
 var<workgroup> temp: array<u32, ITEMS_PER_WORKGROUP*2>;

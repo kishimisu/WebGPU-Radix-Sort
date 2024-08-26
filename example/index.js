@@ -5,6 +5,7 @@ const settings = {
     element_count: 2 ** 20,
     bit_count: 32,
     workgroup_size: 16,
+    use_indirect_dispatch: false,
     check_order: false,
     local_shuffle: false,
     avoid_bank_conflicts: false,
@@ -75,6 +76,7 @@ async function runSort(device, compare_against_cpu = true) {
         count: settings.element_count,
         bit_count: settings.bit_count,
         workgroup_size: { x: settings.workgroup_size, y: settings.workgroup_size },
+        use_indirect_dispatch: settings.use_indirect_dispatch,
         check_order: settings.check_order,
         local_shuffle: settings.local_shuffle,
         avoid_bank_conflicts: settings.avoid_bank_conflicts,
@@ -117,7 +119,7 @@ async function onClickSort(device) {
     result.innerHTML += `[${output.children.length}] `
     result.innerHTML += `Sorting ${makeColor(prettifyNumber(settings.element_count), '#ff9933')} ${settings.sort_mode.toLowerCase()} of ${makeColor(settings.bit_count, '#ff9933')} bits`
     result.innerHTML += `<br>Initial sort: ${settings.initial_sort}, Workgroup size: ${settings.workgroup_size}x${settings.workgroup_size}`
-    result.innerHTML += `<br>Optimizations: (${settings.check_order}, ${settings.local_shuffle}, ${settings.avoid_bank_conflicts})`
+    result.innerHTML += `<br>Optimizations: (${settings.use_indirect_dispatch}, ${settings.check_order}, ${settings.local_shuffle}, ${settings.avoid_bank_conflicts})`
 
     for (let i = 0; i < settings.consecutive_sorts; i++) {
         const times = await runSort(device, i == 0)
@@ -144,6 +146,7 @@ class GUI {
         this.createSlider(settings, 'workgroup_size', 'Workgroup Size', settings.workgroup_size, 2, 5, 1, { power_of_two: true })
     
         this.createTitle('Optimizations')
+        this.createCheckbox(settings, 'use_indirect_dispatch', 'Indirect Dispatch', settings.use_indirect_dispatch)
         this.createCheckbox(settings, 'check_order', 'Check If Sorted', settings.check_order)
         this.createCheckbox(settings, 'local_shuffle', 'Local Shuffle', settings.local_shuffle)
         this.createCheckbox(settings, 'avoid_bank_conflicts', 'Avoid Bank Conflicts', settings.avoid_bank_conflicts)
@@ -166,6 +169,7 @@ class GUI {
             'Number of bits to sort',
             'Workgroup size in x and y dimensions',
             '',
+            'Use indirect dispatch buffers for the compute passes',
             'Check if the data is sorted after each pass to stop the kernel early',
             'Use local shuffle optimization (does not seem to improve performance)',
             'Avoid bank conflicts in shared memory (does not seem to improve performance)',

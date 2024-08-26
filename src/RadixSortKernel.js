@@ -19,6 +19,7 @@ class RadixSortKernel {
      * @param {number} count - Number of elements to sort
      * @param {number} bit_count - Number of bits per element (default: 32)
      * @param {object} workgroup_size - Workgroup size in x and y dimensions. (x * y) must be a power of two
+     * @param {boolean} use_indirect_dispatch - Use indirect dipatch buffers for the GPUComputePassEncoder (default: false) 
      * @param {boolean} check_order - Enable "order checking" optimization. Can improve performance if the data needs to be sorted in real-time and doesn't change much. (default: false)
      * @param {boolean} local_shuffle - Enable "local shuffling" optimization for the radix sort kernel (default: false)
      * @param {boolean} avoid_bank_conflicts - Enable "avoiding bank conflicts" optimization for the prefix sum kernel (default: false)
@@ -30,6 +31,7 @@ class RadixSortKernel {
         count,
         bit_count = 32,
         workgroup_size = { x: 16, y: 16 },
+        use_indirect_dispatch = false,
         check_order = false,
         local_shuffle = false,
         avoid_bank_conflicts = false,
@@ -41,10 +43,16 @@ class RadixSortKernel {
         if (!Number.isInteger(workgroup_size.x) || !Number.isInteger(workgroup_size.y)) throw new Error('Invalid workgroup_size parameter')
         if (bit_count % 4 != 0) throw new Error('bit_count must be a multiple of 4')
 
+        if (check_order && !use_indirect_dispatch) {
+            console.warn(`Warning: check_order requires use_indirect_dispatch to be enabled, enabling...`)
+            use_indirect_dispatch = true
+        }
+
         this.device = device
         this.count = count
         this.bit_count = bit_count
         this.workgroup_size = workgroup_size
+        this.use_indirect_dispatch = use_indirect_dispatch
         this.check_order = check_order
         this.local_shuffle = local_shuffle
         this.avoid_bank_conflicts = avoid_bank_conflicts
@@ -212,8 +220,8 @@ class RadixSortKernel {
         this.buffers.tmpValues = tmpValuesBuffer
         this.buffers.localPrefixSum = localPrefixSumBuffer
 
-        // Only create indirect dispatch buffers when check_order optimization is enabled
-        if (!this.check_order) {
+        // Skip indirect dispatch buffers if not needed
+        if (!this.use_indirect_dispatch) {
             return
         }
 
@@ -261,7 +269,7 @@ class RadixSortKernel {
     }
 
     create_check_sort_kernels(checkSortPartitionData) {
-        if (!this.check_order) {
+        if (!this.use_indirect_dispatch) {
             return
         }
 
@@ -297,6 +305,7 @@ class RadixSortKernel {
         if (checkSortFast.threads_per_workgroup < checkSortFull.pipelines.length || checkSortFull.threads_per_workgroup < initialDispatchElementCount) {
             console.warn(`Warning: workgroup size is too small to enable check sort optimization, disabling...`)
             this.check_order = false
+            this.use_indirect_dispatch = false
             return
         }
 
@@ -500,11 +509,11 @@ class RadixSortKernel {
      * @param {GPUComputePassEncoder} pass 
      */
     dispatch(pass) {
-        if (!this.check_order) {
-            this.#dispatchPipelines(pass)
+        if (this.use_indirect_dispatch) {
+            this.#dispatchPipelinesIndirect(pass)
         }
         else {
-            this.#dispatchPipelinesIndirect(pass)
+            this.#dispatchPipelines(pass)
         }
     }
 
@@ -534,13 +543,15 @@ class RadixSortKernel {
      * Dispatch workgroups from indirect GPU buffers (used when check_order is enabled)
      */
     #dispatchPipelinesIndirect(pass) {
-        // Reset the `dispatch` and `is_sorted` buffers
-        this.kernels.checkSort.reset.dispatch(pass)
+        if (this.check_order) {
+            // Reset `dispatch` and `is_sorted` buffers
+            this.kernels.checkSort.reset.dispatch(pass)
+        }
         
         for (let i = 0; i < this.bit_count / 2; i++) {
             const { blockSumPipeline, reorderPipeline } = this.pipelines[i]
 
-            if (i % 2 == 0) {
+            if (this.check_order && i % 2 == 0) {
                 // Check if the data is sorted every 2 passes
                 this.kernels.checkSort.fast.dispatch(pass, this.buffers.dispatchSize, this.dispatchOffsets.check_sort_fast)
                 this.kernels.checkSort.full.dispatch(pass, this.buffers.checkSortFullDispatchSize)
